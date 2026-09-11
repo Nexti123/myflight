@@ -10,7 +10,6 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database import init_db, add_subscription, remove_subscription, check_subscription
 from api import get_flight_info, get_weather, get_airport_board
 
-# Включаем детальное логирование в консоль с немедленным выводом
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -18,9 +17,6 @@ logging.basicConfig(
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    logging.error("❌ BOT_TOKEN не задан в переменных окружения Render!")
-
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 app = Flask(__name__)
 user_states = {}
@@ -65,7 +61,7 @@ def send_main_menu(chat_id, name):
         chat_id,
         f"👋 Привет, <b>{name}</b>!\n\n"
         "✈️ <b>Живой тревел-ассистент готов к работе.</b>\n"
-        "Выбери аэропорт для табло, введи другой аэропорт или отправь в чат **номер любого рейса**.",
+        "Выберите аэропорт для просмотра полного расписания на день, введите код или отправьте в чат **номер любого рейса**.",
         reply_markup=markup
     )
 
@@ -73,7 +69,7 @@ def send_main_menu(chat_id, name):
 def callback_enter_flight(call):
     user_states[call.message.chat.id] = "waiting_flight"
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "✍️ <b>Введите номер рейса текстом</b>\n(например: <code>SU-1234</code>, <code>EK-131</code>):")
+    bot.send_message(call.message.chat.id, "✍️ <b>Введите номер рейса текстом</b>\n(например: <code>SU-1234</code>, <code>S7-2514</code>):")
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_enter_airport")
 def callback_enter_airport(call):
@@ -85,8 +81,10 @@ def callback_enter_airport(call):
 def callback_board(call):
     user_states.pop(call.message.chat.id, None)
     bot.answer_callback_query(call.id)
-    airport_code = call.data.split("_")[1]
-    show_airport_board(call.message.chat.id, airport_code)
+    parts = call.data.split("_")
+    airport_code = parts[1]
+    page = int(parts[2]) if len(parts) > 2 else 0
+    show_airport_board(call.message.chat.id, airport_code, page)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select_flight_"))
 def callback_select_flight(call):
@@ -119,24 +117,41 @@ def callback_main(call):
     bot.answer_callback_query(call.id)
     send_main_menu(call.message.chat.id, call.from_user.first_name)
 
-def show_airport_board(chat_id, airport_code):
+def show_airport_board(chat_id, airport_code, page=0):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     board = loop.run_until_complete(get_airport_board(airport_code))
     loop.close()
 
     if not board:
-        bot.send_message(chat_id, f"❌ Не удалось получить живое табло для аэропорта <b>{airport_code}</b> или рейсы отсутствуют.")
+        bot.send_message(chat_id, f"❌ Не удалось получить расписание для аэропорта <b>{airport_code}</b>.")
         return
 
+    # Разбиваем по 6 рейсов на страницу, чтобы можно было смотреть расписание на весь день по страницам
+    per_page = 6
+    total_pages = (len(board) + per_page - 1) // per_page
+    page = max(0, min(page, total_pages - 1))
+    
+    chunk = board[page * per_page : (page + 1) * per_page]
+
     markup = InlineKeyboardMarkup()
-    for flight in board:
+    for flight in chunk:
         btn_text = f"✈️ {flight['flight']} ➔ {flight['dest']} ({flight['time']})"
         markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_flight_{flight['flight']}"))
     
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"board_{airport_code}_{page - 1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"board_{airport_code}_{page + 1}"))
+    
+    if nav_buttons:
+        markup.row(*nav_buttons)
+        
     markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
 
-    bot.send_message(chat_id, f"📊 <b>Табло вылетов ({airport_code.upper()})</b>\nНажми на рейс для проверки статуса:", reply_markup=markup)
+    text = f"📊 <b>Расписание рейсов на весь день ({airport_code.upper()})</b>\nСтраница {page + 1} из {total_pages}\nВыберите рейс для подробностей:"
+    bot.send_message(chat_id, text, reply_markup=markup)
 
 def show_flight_card(chat_id, user_id, flight_num, edit_message_id=None):
     loop = asyncio.new_event_loop()
@@ -160,7 +175,7 @@ def show_flight_card(chat_id, user_id, flight_num, edit_message_id=None):
             bot.send_message(chat_id, err_text, reply_markup=markup)
         return
 
-    weather_arr = loop.run_until_complete(get_weather(data["arr_city_code"]))
+    weather_arr = loop.run_until_complete(get_weather(data["arr_query_for_weather"]))
     is_subbed = loop.run_until_complete(check_subscription(flight_num, user_id))
     loop.close()
 
