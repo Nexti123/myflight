@@ -10,9 +10,18 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database import init_db, add_subscription, remove_subscription, check_subscription
 from api import get_flight_info, get_weather, get_airport_board
 
-TOKEN = os.getenv("BOT_TOKEN")
-bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
+# Включаем детальное логирование в консоль с немедленным выводом
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout
+)
 
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    logging.error("❌ BOT_TOKEN не задан в переменных окружения Render!")
+
+bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 app = Flask(__name__)
 user_states = {}
 
@@ -103,7 +112,6 @@ def callback_toggle_sub(call):
         bot.answer_callback_query(call.id, "🔔 Уведомления включены!")
     loop.close()
     
-    # Обновляем карточку с новым состоянием тумблера
     show_flight_card(call.message.chat.id, user_id, flight_num, edit_message_id=call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_main")
@@ -201,15 +209,15 @@ def handle_all_text(message):
     show_flight_card(chat_id, message.from_user.id, text)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-    
+    logging.info("🔄 Инициализация базы данных...")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(init_db())
     loop.close()
 
     port = int(os.getenv("PORT", 10000))
-    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port)).start()
+    logging.info(f"🌐 Запуск веб-сервера Flask на порту {port}...")
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port), daemon=True).start()
     
-    print("🚀 Живой бот успешно запущен...")
+    logging.info("🚀 Бот запущен и слушает обновления от Telegram...")
     bot.infinity_polling(skip_pending=True)
