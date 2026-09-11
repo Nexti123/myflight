@@ -125,7 +125,6 @@ def show_airport_board(chat_id, airport_code, page=0):
         bot.send_message(chat_id, f"❌ Не удалось получить расписание для аэропорта <b>{airport_code}</b>.")
         return
 
-    # Разбиваем по 6 рейсов на страницу для удобного просмотра расписания на весь день
     per_page = 6
     total_pages = (len(board) + per_page - 1) // per_page
     page = max(0, min(page, total_pages - 1))
@@ -134,7 +133,7 @@ def show_airport_board(chat_id, airport_code, page=0):
 
     markup = InlineKeyboardMarkup()
     for flight in chunk:
-        btn_text = f"{flight['time']} | {flight['flight']} ➔ {flight['dest']} ({flight['status'])})"
+        btn_text = f"{flight['time']} | {flight['flight']} ➔ {flight['dest']} ({flight['status']})"
         markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_flight_{flight['flight']}"))
     
     nav_buttons = []
