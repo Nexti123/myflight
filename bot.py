@@ -8,7 +8,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from database import init_db, add_subscription, remove_subscription, check_subscription
-from api import get_flight_info, get_weather, get_airport_board
+from api import get_flight_info, get_weather, get_airport_board, get_airport_details
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,6 +25,14 @@ user_states = {}
 def index():
     return "Flight Bot is active and running!"
 
+def run_async(coro):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_states.pop(message.chat.id, None)
@@ -32,11 +40,7 @@ def send_welcome(message):
     
     if len(args) > 1 and args[1].startswith("flight_"):
         flight_num = args[1].split("_")[1].upper()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(add_subscription(flight_num, message.from_user.id, message.from_user.id))
-        loop.close()
-        
+        run_async(add_subscription(flight_num, message.from_user.id, message.from_user.id))
         bot.send_message(message.chat.id, f"🔗 <b>Подписка оформлена!</b> Вы подписались на рейс <b>{flight_num}</b>.")
         show_flight_card(message.chat.id, message.from_user.id, flight_num)
         return
@@ -47,7 +51,7 @@ def send_main_menu(chat_id, name):
     user_states.pop(chat_id, None)
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("✈️ Найти рейс по номеру", callback_data="menu_enter_flight"))
-    markup.add(InlineKeyboardButton("🔍 Ввести другой аэропорт (IATA)", callback_data="menu_enter_airport"))
+    markup.add(InlineKeyboardButton("🔍 Онлайн-табло аэропорта", callback_data="menu_enter_airport"))
     markup.add(
         InlineKeyboardButton("🛫 Шереметьево (SVO)", callback_data="board_SVO"),
         InlineKeyboardButton("🛫 Пулково (LED)", callback_data="board_LED")
@@ -60,8 +64,8 @@ def send_main_menu(chat_id, name):
     bot.send_message(
         chat_id,
         f"👋 Привет, <b>{name}</b>!\n\n"
-        "✈️ <b>Живой тревел-ассистент готов к работе.</b>\n"
-        "Выберите аэропорт для просмотра полного расписания на день, введите код или отправьте в чат **номер любого рейса**.",
+        "✈️ <b>Твой персональный тревел-ассистент готов к работе.</b>\n"
+        "Выбери аэропорт для просмотра упорядоченного расписания на весь день или отправь в чат **номер любого рейса**.",
         reply_markup=markup
     )
 
@@ -98,17 +102,13 @@ def callback_toggle_sub(call):
     flight_num = call.data.split("_")[2]
     user_id = call.from_user.id
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    is_subbed = loop.run_until_complete(check_subscription(flight_num, user_id))
-    
+    is_subbed = run_async(check_subscription(flight_num, user_id))
     if is_subbed:
-        loop.run_until_complete(remove_subscription(flight_num, user_id))
+        run_async(remove_subscription(flight_num, user_id))
         bot.answer_callback_query(call.id, "🔕 Уведомления отключены")
     else:
-        loop.run_until_complete(add_subscription(flight_num, user_id, user_id))
+        run_async(add_subscription(flight_num, user_id, user_id))
         bot.answer_callback_query(call.id, "🔔 Уведомления включены!")
-    loop.close()
     
     show_flight_card(call.message.chat.id, user_id, flight_num, edit_message_id=call.message.message_id)
 
@@ -118,16 +118,14 @@ def callback_main(call):
     send_main_menu(call.message.chat.id, call.from_user.first_name)
 
 def show_airport_board(chat_id, airport_code, page=0):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    board = loop.run_until_complete(get_airport_board(airport_code))
-    loop.close()
+    board = run_async(get_airport_board(airport_code))
+    airport_info = get_airport_details(airport_code)
 
     if not board:
         bot.send_message(chat_id, f"❌ Не удалось получить расписание для аэропорта <b>{airport_code}</b>.")
         return
 
-    # Разбиваем по 6 рейсов на страницу, чтобы можно было смотреть расписание на весь день по страницам
+    # Разбиваем по 6 рейсов на страницу для удобного просмотра расписания на весь день
     per_page = 6
     total_pages = (len(board) + per_page - 1) // per_page
     page = max(0, min(page, total_pages - 1))
@@ -136,7 +134,7 @@ def show_airport_board(chat_id, airport_code, page=0):
 
     markup = InlineKeyboardMarkup()
     for flight in chunk:
-        btn_text = f"✈️ {flight['flight']} ➔ {flight['dest']} ({flight['time']})"
+        btn_text = f"{flight['time']} | {flight['flight']} ➔ {flight['dest']} ({flight['status'])})"
         markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_flight_{flight['flight']}"))
     
     nav_buttons = []
@@ -150,22 +148,22 @@ def show_airport_board(chat_id, airport_code, page=0):
         
     markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
 
-    text = f"📊 <b>Расписание рейсов на весь день ({airport_code.upper()})</b>\nСтраница {page + 1} из {total_pages}\nВыберите рейс для подробностей:"
+    text = (
+        f"{airport_info}\n\n"
+        f"📊 <b>Онлайн-табло на весь день</b> (Страница {page + 1} из {total_pages})\n"
+        "<i>Рейсы отсортированы по времени вылета. Нажмите на рейс для деталей:</i>"
+    )
     bot.send_message(chat_id, text, reply_markup=markup)
 
 def show_flight_card(chat_id, user_id, flight_num, edit_message_id=None):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    data = loop.run_until_complete(get_flight_info(flight_num))
+    data = run_async(get_flight_info(flight_num))
     
     if not data:
-        loop.close()
         err_text = (
             f"❌ <b>Рейс {flight_num} не найден в активной мировой базе данных.</b>\n\n"
             "Возможные причины:\n"
             "• Рейс завершен или отменен;\n"
-            "• Неправильно указан номер или код авиакомпании.\n\n"
-            "Проверьте номер и попробуйте ввести его снова."
+            "• Неправильно указан номер или код авиакомпании."
         )
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
@@ -175,9 +173,8 @@ def show_flight_card(chat_id, user_id, flight_num, edit_message_id=None):
             bot.send_message(chat_id, err_text, reply_markup=markup)
         return
 
-    weather_arr = loop.run_until_complete(get_weather(data["arr_query_for_weather"]))
-    is_subbed = loop.run_until_complete(check_subscription(flight_num, user_id))
-    loop.close()
+    weather_arr = run_async(get_weather(data["arr_query_for_weather"]))
+    is_subbed = run_async(check_subscription(flight_num, user_id))
 
     bot_info = bot.get_me()
     share_link = f"https://t.me/{bot_info.username}?start=flight_{data['flight']}"
@@ -225,10 +222,7 @@ def handle_all_text(message):
 
 if __name__ == "__main__":
     logging.info("🔄 Инициализация базы данных...")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_db())
-    loop.close()
+    run_async(init_db())
 
     port = int(os.getenv("PORT", 10000))
     logging.info(f"🌐 Запуск веб-сервера Flask на порту {port}...")
