@@ -7,7 +7,6 @@ WEATHER_API_KEY = os.getenv("WEATHER_API_KEY", "")
 async def get_flight_info(flight_number: str):
     flight_number = flight_number.upper()
     
-    # Если введен ключ Aviationstack, делаем реальный запрос к мировому API
     if AVIATION_API_KEY:
         url = f"http://api.aviationstack.com/v1/flights?access_key={AVIATION_API_KEY}&flight_iata={flight_number}"
         async with aiohttp.ClientSession() as session:
@@ -39,7 +38,6 @@ async def get_flight_info(flight_number: str):
             except Exception:
                 pass
 
-    # Универсальный fallback, если API-ключ не задан (чтобы бот выдавал красивую структуру по любому рейсу)
     return {
         "flight": flight_number,
         "airline": "Международные авиалинии",
@@ -57,7 +55,6 @@ async def get_flight_info(flight_number: str):
 
 async def get_airport_board(airport_code: str):
     airport_code = airport_code.upper()
-    # Динамическое табло для популярных хабов (SVO, DME, LED, DXB и т.д.)
     boards = {
         "SVO": [
             {"flight": "SU-1008", "dest": "Сочи", "time": "18:20", "status": "Летит"},
@@ -80,12 +77,12 @@ async def get_weather(city_query: str):
     
     url = f"https://api.openweathermap.org/data/2.5/weather?q={city_query}&units=metric&appid={WEATHER_API_KEY}&lang=ru"
     async with aiohttp.ClientSession() as session:
-        try:async with session.get(url) as response:
+        try:
+            async with session.get(url) as response:
                 if response.status == 200:
                     data = await response.json()
                     temp = data["main"]["temp"]
-                    desc = data["weather"][0]["description"]
-                    return f"🌡 Погода в пункте прилета: {temp}°C, {desc}"
+                    desc = data["weather"][0]["description"]return f"🌡 Погода в пункте прилета: {temp}°C, {desc}"
         except Exception:
             pass
         return "🌡 Погода: данные уточняются"
