@@ -7,15 +7,13 @@ from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from database import init_db, add_subscription, get_all_subscriptions
+from database import init_db, add_subscription, remove_subscription, check_subscription
 from api import get_flight_info, get_weather, get_airport_board
 
 TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 app = Flask(__name__)
-
-# Словарь для отслеживания состояний пользователей (например, ожидание кода аэропорта)
 user_states = {}
 
 @app.route("/")
@@ -34,11 +32,8 @@ def send_welcome(message):
         loop.run_until_complete(add_subscription(flight_num, message.from_user.id, message.from_user.id))
         loop.close()
         
-        bot.send_message(
-            message.chat.id,
-            f"🔗 <b>Подписка оформлена!</b>\nВы подписались на обновления рейса <b>{flight_num}</b>."
-        )
-        show_flight_card(message.chat.id, flight_num)
+        bot.send_message(message.chat.id, f"🔗 <b>Подписка оформлена!</b> Вы подписались на рейс <b>{flight_num}</b>.")
+        show_flight_card(message.chat.id, message.from_user.id, flight_num)
         return
 
     send_main_menu(message.chat.id, message.from_user.first_name)
@@ -61,7 +56,7 @@ def send_main_menu(chat_id, name):
         chat_id,
         f"👋 Привет, <b>{name}</b>!\n\n"
         "✈️ <b>Живой тревел-ассистент готов к работе.</b>\n"
-        "Выбери аэропорт для табло, нажми кнопку ввода своего аэропорта или просто отправь в чат **номер любого рейса** (например: <code>SU-1008</code>, <code>EK-131</code>).",
+        "Выбери аэропорт для табло, введи другой аэропорт или отправь в чат **номер любого рейса**.",
         reply_markup=markup
     )
 
@@ -69,19 +64,13 @@ def send_main_menu(chat_id, name):
 def callback_enter_flight(call):
     user_states[call.message.chat.id] = "waiting_flight"
     bot.answer_callback_query(call.id)
-    bot.send_message(
-        call.message.chat.id, 
-        "✍️ <b>Введите номер рейса текстом</b>\n(например: <code>SU-1234</code>, <code>S7-2026</code>):"
-    )
+    bot.send_message(call.message.chat.id, "✍️ <b>Введите номер рейса текстом</b>\n(например: <code>SU-1234</code>, <code>EK-131</code>):")
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_enter_airport")
 def callback_enter_airport(call):
     user_states[call.message.chat.id] = "waiting_airport"
     bot.answer_callback_query(call.id)
-    bot.send_message(
-        call.message.chat.id, 
-        "✍️ <b>Введите 3-буквенный IATA код аэропорта</b>\n(например: <code>JFK</code>, <code>IST</code>, <code>VKO</code>, <code>AER</code>):"
-    )
+    bot.send_message(call.message.chat.id, "✍️ <b>Введите 3-буквенный IATA код аэропорта</b>\n(например: <code>JFK</code>, <code>IST</code>, <code>VKO</code>):")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("board_"))
 def callback_board(call):
@@ -95,10 +84,31 @@ def callback_select_flight(call):
     user_states.pop(call.message.chat.id, None)
     bot.answer_callback_query(call.id)
     flight_num = call.data.split("_")[2]
-    show_flight_card(call.message.chat.id, flight_num)
+    show_flight_card(call.message.chat.id, call.from_user.id, flight_num)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("toggle_sub_"))
+def callback_toggle_sub(call):
+    flight_num = call.data.split("_")[2]
+    user_id = call.from_user.id
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    is_subbed = loop.run_until_complete(check_subscription(flight_num, user_id))
+    
+    if is_subbed:
+        loop.run_until_complete(remove_subscription(flight_num, user_id))
+        bot.answer_callback_query(call.id, "🔕 Уведомления отключены")
+    else:
+        loop.run_until_complete(add_subscription(flight_num, user_id, user_id))
+        bot.answer_callback_query(call.id, "🔔 Уведомления включены!")
+    loop.close()
+    
+    # Обновляем карточку с новым состоянием тумблера
+    show_flight_card(call.message.chat.id, user_id, flight_num, edit_message_id=call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_main")
 def callback_main(call):
+    bot.answer_callback_query(call.id)
     send_main_menu(call.message.chat.id, call.from_user.first_name)
 
 def show_airport_board(chat_id, airport_code):
@@ -107,6 +117,10 @@ def show_airport_board(chat_id, airport_code):
     board = loop.run_until_complete(get_airport_board(airport_code))
     loop.close()
 
+    if not board:
+        bot.send_message(chat_id, f"❌ Не удалось получить живое табло для аэропорта <b>{airport_code}</b> или рейсы отсутствуют.")
+        return
+
     markup = InlineKeyboardMarkup()
     for flight in board:
         btn_text = f"✈️ {flight['flight']} ➔ {flight['dest']} ({flight['time']})"
@@ -114,17 +128,32 @@ def show_airport_board(chat_id, airport_code):
     
     markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
 
-    bot.send_message(
-        chat_id,
-        f"📊 <b>Табло вылетов ({airport_code.upper()})</b>\nНажми на рейс для проверки статуса:",
-        reply_markup=markup
-    )
+    bot.send_message(chat_id, f"📊 <b>Табло вылетов ({airport_code.upper()})</b>\nНажми на рейс для проверки статуса:", reply_markup=markup)
 
-def show_flight_card(chat_id, flight_num):
+def show_flight_card(chat_id, user_id, flight_num, edit_message_id=None):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     data = loop.run_until_complete(get_flight_info(flight_num))
+    
+    if not data:
+        loop.close()
+        err_text = (
+            f"❌ <b>Рейс {flight_num} не найден в активной мировой базе данных.</b>\n\n"
+            "Возможные причины:\n"
+            "• Рейс завершен или отменен;\n"
+            "• Неправильно указан номер или код авиакомпании.\n\n"
+            "Проверьте номер и попробуйте ввести его снова."
+        )
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
+        if edit_message_id:
+            bot.edit_message_text(err_text, chat_id, edit_message_id, reply_markup=markup)
+        else:
+            bot.send_message(chat_id, err_text, reply_markup=markup)
+        return
+
     weather_arr = loop.run_until_complete(get_weather(data["arr_city_code"]))
+    is_subbed = loop.run_until_complete(check_subscription(flight_num, user_id))
     loop.close()
 
     bot_info = bot.get_me()
@@ -145,28 +174,31 @@ def show_flight_card(chat_id, flight_num):
     )
     
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("👨‍👩‍👧 Поделиться с родителями", url=f"https://t.me/share/url?url={share_link}&text=Следи за моим полетом в реальном времени!"))
+    sub_btn_text = "🔕 Выключить уведомления" if is_subbed else "🔔 Включить уведомления"
+    markup.add(InlineKeyboardButton(sub_btn_text, callback_data=f"toggle_sub_{data['flight']}"))
+    markup.add(InlineKeyboardButton("👨‍👩‍👧 Поделиться с близкими", url=f"https://t.me/share/url?url={share_link}&text=Следи за моим полетом в реальном времени!"))
     markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
     
-    bot.send_message(chat_id, response_text, reply_markup=markup)
+    if edit_message_id:
+        bot.edit_message_text(response_text, chat_id, edit_message_id, reply_markup=markup)
+    else:
+        bot.send_message(chat_id, response_text, reply_markup=markup)
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_text(message):
     chat_id = message.chat.id
     text = message.text.strip().upper()
     
-    # Проверяем, ожидал ли бот ввод аэропорта
     if user_states.get(chat_id) == "waiting_airport":
         user_states.pop(chat_id, None)
         if len(text) == 3:
             show_airport_board(chat_id, text)
         else:
-            bot.send_message(chat_id, "❌ Неверный формат. Код аэропорта должен состоять из 3 букв (например: <code>JFK</code>). Попробуйте снова через меню.")
+            bot.send_message(chat_id, "❌ Неверный формат. Код аэропорта должен состоять из 3 букв (например: <code>JFK</code>).")
         return
 
-    # В остальных случаях обрабатываем текст как номер рейса
     user_states.pop(chat_id, None)
-    show_flight_card(chat_id, text)
+    show_flight_card(chat_id, message.from_user.id, text)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
