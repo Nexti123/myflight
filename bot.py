@@ -15,12 +15,16 @@ bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 app = Flask(__name__)
 
+# Словарь для отслеживания состояний пользователей (например, ожидание кода аэропорта)
+user_states = {}
+
 @app.route("/")
 def index():
     return "Flight Bot is active and running!"
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    user_states.pop(message.chat.id, None)
     args = message.text.split()
     
     if len(args) > 1 and args[1].startswith("flight_"):
@@ -40,8 +44,10 @@ def send_welcome(message):
     send_main_menu(message.chat.id, message.from_user.first_name)
 
 def send_main_menu(chat_id, name):
+    user_states.pop(chat_id, None)
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("✈️ Найти рейс по номеру", callback_data="menu_enter_flight"))
+    markup.add(InlineKeyboardButton("🔍 Ввести другой аэропорт (IATA)", callback_data="menu_enter_airport"))
     markup.add(
         InlineKeyboardButton("🛫 Шереметьево (SVO)", callback_data="board_SVO"),
         InlineKeyboardButton("🛫 Пулково (LED)", callback_data="board_LED")
@@ -55,33 +61,44 @@ def send_main_menu(chat_id, name):
         chat_id,
         f"👋 Привет, <b>{name}</b>!\n\n"
         "✈️ <b>Живой тревел-ассистент готов к работе.</b>\n"
-        "Выбери аэропорт для табло или отправь в чат **любой реальный номер рейса** текстом (например: <code>SU-1008</code>, <code>EK-131</code>), чтобы получить актуальные данные из мировой базы и погоду!",
+        "Выбери аэропорт для табло, нажми кнопку ввода своего аэропорта или просто отправь в чат **номер любого рейса** (например: <code>SU-1008</code>, <code>EK-131</code>).",
         reply_markup=markup
     )
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_enter_flight")
 def callback_enter_flight(call):
+    user_states[call.message.chat.id] = "waiting_flight"
     bot.answer_callback_query(call.id)
     bot.send_message(
         call.message.chat.id, 
         "✍️ <b>Введите номер рейса текстом</b>\n(например: <code>SU-1234</code>, <code>S7-2026</code>):"
     )
 
+@bot.callback_query_handler(func=lambda call: call.data == "menu_enter_airport")
+def callback_enter_airport(call):
+    user_states[call.message.chat.id] = "waiting_airport"
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        call.message.chat.id, 
+        "✍️ <b>Введите 3-буквенный IATA код аэропорта</b>\n(например: <code>JFK</code>, <code>IST</code>, <code>VKO</code>, <code>AER</code>):"
+    )
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("board_"))
 def callback_board(call):
+    user_states.pop(call.message.chat.id, None)
     bot.answer_callback_query(call.id)
     airport_code = call.data.split("_")[1]
     show_airport_board(call.message.chat.id, airport_code)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select_flight_"))
 def callback_select_flight(call):
+    user_states.pop(call.message.chat.id, None)
     bot.answer_callback_query(call.id)
     flight_num = call.data.split("_")[2]
     show_flight_card(call.message.chat.id, flight_num)
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_main")
 def callback_main(call):
-    bot.answer_callback_query(call.id)
     send_main_menu(call.message.chat.id, call.from_user.first_name)
 
 def show_airport_board(chat_id, airport_code):
@@ -99,7 +116,7 @@ def show_airport_board(chat_id, airport_code):
 
     bot.send_message(
         chat_id,
-        f"📊 <b>Табло вылетов ({airport_code})</b>\nНажми на рейс для проверки статуса:",
+        f"📊 <b>Табло вылетов ({airport_code.upper()})</b>\nНажми на рейс для проверки статуса:",
         reply_markup=markup
     )
 
@@ -135,8 +152,21 @@ def show_flight_card(chat_id, flight_num):
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_text(message):
-    flight_num = message.text.strip().upper()
-    show_flight_card(message.chat.id, flight_num)
+    chat_id = message.chat.id
+    text = message.text.strip().upper()
+    
+    # Проверяем, ожидал ли бот ввод аэропорта
+    if user_states.get(chat_id) == "waiting_airport":
+        user_states.pop(chat_id, None)
+        if len(text) == 3:
+            show_airport_board(chat_id, text)
+        else:
+            bot.send_message(chat_id, "❌ Неверный формат. Код аэропорта должен состоять из 3 букв (например: <code>JFK</code>). Попробуйте снова через меню.")
+        return
+
+    # В остальных случаях обрабатываем текст как номер рейса
+    user_states.pop(chat_id, None)
+    show_flight_card(chat_id, text)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
