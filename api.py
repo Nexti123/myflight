@@ -41,7 +41,7 @@ async def get_flight_info(flight_number: str):
     return {
         "flight": flight_number,
         "airline": "Международные авиалинии",
-        "status": "В ПУТИ 🟢 ",
+        "status": "В ПУТИ 🟢",
         "departure_airport": "Аэропорт отправления",
         "arrival_airport": "Аэропорт назначения",
         "departure_time": "Сегодня",
@@ -83,7 +83,7 @@ async def get_weather(city_query: str):
                     data = await response.json()
                     temp = data["main"]["temp"]
                     desc = data["weather"][0]["description"]
-return f"🌡 Погода в пункте прилета: {temp}°C, {desc}"
+                    return f"🌡 Погода в пункте прилета: {temp}°C, {desc}"
         except Exception:
             pass
         return "🌡 Погода: данные уточняются"
