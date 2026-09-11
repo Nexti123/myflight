@@ -7,7 +7,7 @@ from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from database import init_db, add_subscription
+from database import init_db, add_subscription, get_all_subscriptions
 from api import get_flight_info, get_weather, get_airport_board
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -32,8 +32,7 @@ def send_welcome(message):
         
         bot.send_message(
             message.chat.id,
-            f"🔗 Вы успешно подписались на отслеживание рейса <b>{flight_num}</b>!\n"
-            "Мы пришлем уведомление при изменении статуса."
+            f"🔗 <b>Подписка оформлена!</b>\nВы подписались на обновления рейса <b>{flight_num}</b>."
         )
         show_flight_card(message.chat.id, flight_num)
         return
@@ -43,20 +42,30 @@ def send_welcome(message):
 def send_main_menu(chat_id, name):
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("✈️ Найти рейс по номеру", callback_data="menu_enter_flight"))
-    markup.add(InlineKeyboardButton("📊 Табло: Шереметьево (SVO)", callback_data="board_SVO"))
-    markup.add(InlineKeyboardButton("📊 Табло: Пулково (LED)", callback_data="board_LED"))
+    markup.add(
+        InlineKeyboardButton("🛫 Шереметьево (SVO)", callback_data="board_SVO"),
+        InlineKeyboardButton("🛫 Пулково (LED)", callback_data="board_LED")
+    )
+    markup.add(
+        InlineKeyboardButton("🛫 Дубай (DXB)", callback_data="board_DXB"),
+        InlineKeyboardButton("🛫 Анталья (AYT)", callback_data="board_AYT")
+    )
     
     bot.send_message(
         chat_id,
-        f"Привет, <b>{name}</b>! ✈️\n"
-        "Я твой полноценный тревел-ассистент. Выбери аэропорт для табло или отправь мне номер любого рейса:",
+        f"👋 Привет, <b>{name}</b>!\n\n"
+        "✈️ <b>Живой тревел-ассистент готов к работе.</b>\n"
+        "Выбери аэропорт для табло или отправь в чат **любой реальный номер рейса** текстом (например: <code>SU-1008</code>, <code>EK-131</code>), чтобы получить актуальные данные из мировой базы и погоду!",
         reply_markup=markup
     )
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_enter_flight")
 def callback_enter_flight(call):
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "✍️ Напиши номер рейса (например: <code>SU-1008</code> или <code>EK-131</code>):")
+    bot.send_message(
+        call.message.chat.id, 
+        "✍️ <b>Введите номер рейса текстом</b>\n(например: <code>SU-1234</code>, <code>S7-2026</code>):"
+    )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("board_"))
 def callback_board(call):
@@ -83,14 +92,14 @@ def show_airport_board(chat_id, airport_code):
 
     markup = InlineKeyboardMarkup()
     for flight in board:
-        btn_text = f"{flight['flight']} | {flight['dest']} ({flight['time']})"
+        btn_text = f"✈️ {flight['flight']} ➔ {flight['dest']} ({flight['time']})"
         markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_flight_{flight['flight']}"))
     
     markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
 
     bot.send_message(
         chat_id,
-        f"📊 <b>Табло вылетов ({airport_code}):</b>\nНажми на рейс для получения детальной информации:",
+        f"📊 <b>Табло вылетов ({airport_code})</b>\nНажми на рейс для проверки статуса:",
         reply_markup=markup
     )
 
@@ -105,21 +114,22 @@ def show_flight_card(chat_id, flight_num):
     share_link = f"https://t.me/{bot_info.username}?start=flight_{data['flight']}"
     
     response_text = (
-        f"✈️ <b>Рейс: {data['flight']}</b>\n"f"🏢 Авиакомпания: {data['airline']}\n"
-        f"📊 Статус: {data['status']}\n\n"
+        f"✈️ <b>Рейс: {data['flight']}</b>\n"
+        f"🏢 Авиакомпания: {data['airline']}\n"
+        f"📌 Статус: <b>{data['status']}</b>\n\n"
         f"🛫 <b>Отправление:</b> {data['departure_airport']}\n"
-        f"🕒 Время: {data['departure_time']}\n\n"
+        f"🕒 Время вылета: {data['departure_time']}\n\n"
         f"🛬 <b>Прибытие:</b> {data['arrival_airport']}\n"
-        f"🕒 Расчет: {data['arrival_time']}\n"
-        f"⏳ В пути: {data['duration']}\n"
+        f"🕒 Расчетное время: {data['arrival_time']}\n"
+        f"⏱ В пути: {data['duration']}\n\n"
         f"{weather_arr}\n\n"
-        f"🚪 <b>Гейт:</b> {data['gate']} (Терминал {data['terminal']})\n"
+        f"🚪 <b>Гейт:</b> {data['gate']} | Терминал: {data['terminal']}\n"
         f"🛩 Воздушное судно: {data['aircraft']}"
     )
     
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("👨‍👩‍👧 Поделиться с близкими", url=f"https://t.me/share/url?url={share_link}&text=Следи за моим полетом в реальном времени!"))
-    markup.add(InlineKeyboardButton("◀️ В меню", callback_data="menu_main"))
+    markup.add(InlineKeyboardButton("👨‍👩‍👧 Поделиться с родителями", url=f"https://t.me/share/url?url={share_link}&text=Следи за моим полетом в реальном времени!"))
+    markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
     
     bot.send_message(chat_id, response_text, reply_markup=markup)
 
@@ -139,6 +149,5 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port)).start()
     
-    print("Полноценный бот запущен...")
-    # remove_webhook=True сбрасывает старые зависшие сессии Telegram (защита от ошибки 409)
+    print("🚀 Живой бот успешно запущен...")
     bot.infinity_polling(skip_pending=True)
