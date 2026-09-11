@@ -1,58 +1,64 @@
-import asyncio
+import os
 import logging
 import sys
-import os
-from aiohttp import web
-from aiogram import Bot, Dispatcher, F, html
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, CommandObject
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from flask import Flask
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from database import init_db, add_subscription, get_subscribers
+from database import init_db, add_subscription
 from api import get_flight_info, get_weather
 
 TOKEN = os.getenv("BOT_TOKEN")
-PORT = int(os.getenv("PORT", 10000))
+bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
+# Flask-сервер для того, чтобы Render не усыплял бота
+app = Flask(__name__)
 
-@dp.message(CommandStart())
-async def command_start_handler(message: Message, command: CommandObject):
-    args = command.args # Сюда прилетит параметр, если перешли по ссылке вида t.me/bot?start=flight_SU1234
+@app.route("/")
+def index():
+    return "Flight Bot is active and running!"
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    args = message.text.split()
     
-    if args and args.startswith("flight_"):
-        flight_num = args.split("_")[1].upper()
-        # Регистрируем подписчика (родителя)
-        await add_subscription(flight_num, message.from_user.id, message.from_user.id)
+    # Если перешли по ссылке вида t.me/bot?start=flight_SU1234
+    if len(args) > 1 and args[1].startswith("flight_"):
+        flight_num = args[1].split("_")[1].upper()
+        # Регистрируем подписчика
+        import asyncio
+        asyncio.run(add_subscription(flight_num, message.from_user.id, message.from_user.id))
         
-        await message.answer(
+        bot.send_message(
+            message.chat.id,
             f"🔗 Вы успешно подписались на отслеживание рейса <b>{flight_num}</b>!\n"
             "Я буду присылать вам все актуальные обновления."
         )
-        # Сразу показываем информацию по рейсу
-        await show_flight_card(message, flight_num)
+        show_flight_card(message.chat.id, flight_num)
         return
 
-    # Обычный старт
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✈️ Ввести номер рейса", callback_data="enter_flight")],
-        [InlineKeyboardButton(text="📊 Табло аэропорта", callback_data="airport_board")]
-    ])
+    # Обычное стартовое меню
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("✈️ Ввести номер рейса", callback_data="enter_flight"))
+    markup.add(InlineKeyboardButton("📊 Табло аэропорта", callback_data="airport_board"))
     
-    await message.answer(
-        f"Привет, {html.bold(message.from_user.full_name)}! ✈️\n"
+    bot.send_message(
+        message.chat.id,
+        f"Привет, <b>{message.from_user.first_name}</b>! ✈️\n"
         "Я твой личный тревел-ассистент. Помогу отследить полеты, узнать погоду и поделюсь информацией с близкими.",
-        reply_markup=keyboard
+        reply_markup=markup
     )
 
-async def show_flight_card(message: Message, flight_num: str):
-    data = await get_flight_info(flight_num)
-    weather_arr = await get_weather(data["arr_city_code"])
-    
-    # Генерируем ссылку для шаринга родителям
-    bot_info = await bot.get_me()
+def show_flight_card(chat_id, flight_num):
+    import asyncio
+    # Получаем данные через асинхронные функции в синхронном потоке
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    data = loop.run_until_complete(get_flight_info(flight_num))
+    weather_arr = loop.run_until_complete(get_weather(data["arr_city_code"]))
+    loop.close()
+
+    bot_info = bot.get_me()
     share_link = f"https://t.me/{bot_info.username}?start=flight_{data['flight']}"
     
     response_html = (
@@ -72,34 +78,31 @@ async def show_flight_card(message: Message, flight_num: str):
         f"🛩 Самолёт: {data['aircraft']}"
     )
     
-    share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👨‍👩‍👧 Поделиться с родителями", url=f"https://t.me/share/url?url={share_link}&text=Следи за моим полетом в реальном времени!")]
-    ])
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("👨‍👩‍👧 Поделиться с родителями", url=f"https://t.me/share/url?url={share_link}&text=Следи за моим полетом в реальном времени!"))
     
-    await message.answer(response_html, reply_markup=share_keyboard)
+    bot.send_message(chat_id, response_html, reply_markup=markup)
 
-@dp.message(F.text)
-async def track_flight(message: Message):
-    flight_num = message.text.strip()
-    await show_flight_card(message, flight_num)
-
-# Веб-сервер для Render (предотвращает засыпание бота)
-async def handle(request):
-    return web.Response(text="Flight Bot is active and running!")
-
-async def web_server():
-    app = web.Application()
-    app.router.add_get("/", handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-
-async def main():
-    await init_db()
-    await web_server()
-    await dp.start_polling(bot)
+@bot.message_handler(func=lambda message: True)
+def handle_all_text(message):
+    flight_num = message.text.strip().upper()
+    show_flight_card(message.chat.id, flight_num)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-    asyncio.run(main())
+    import threading
+    
+    # Инициализируем БД при старте
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_db())
+    loop.close()
+
+    # Запускаем Flask в отдельном потоке (для Render)
+    port = int(os.getenv("PORT", 10000))
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port)).start()
+    
+    # Запускаем бота
+    print("Бот запущен...")
+    bot.infinity_polling()
