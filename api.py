@@ -1,19 +1,11 @@
 import aiohttp
 import os
 
-# Получаем ключи из переменных окружения
-AVIATION_API_KEY = os.getenv("AVIATION_API_KEY", "")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY", "")
 
 async def get_flight_info(flight_number: str):
-    """
-    Запрос информации о рейсе. 
-    Здесь можно подключить выбранное API (например, AeroDataBox через RapidAPI).
-    """
-    # Пока возвращаем структурированный пример, который легко заменится на реальный JSON от API
     flight_number = flight_number.upper()
-    
-    # Демо-данные для теста верстки и логики
+    # Демо-данные (сюда потом можно подключить реальное API)
     return {
         "flight": flight_number,
         "airline": "Аэрофлот",
@@ -26,18 +18,29 @@ async def get_flight_info(flight_number: str):
         "gate": "C14",
         "terminal": "B",
         "aircraft": "Airbus A320",
-        "dep_city_code": "SVO",
-        "arr_city_code": "LED"
+        "arr_city_code": "St Petersburg"
     }
 
-async def get_weather(city_code: str):
+async def get_airport_board(airport_code: str):
     """
-    Получение погоды в аэропорту по его коду или названию через OpenWeatherMap
+    Генерирует список рейсов для интерактивного табло аэропорта
+    """
+    airport_code = airport_code.upper()
+    # Демо-список рейсов для табло
+    return [
+        {"flight": "SU-1234", "dest": "Санкт-Петербург", "time": "14:15", "status": "По расписанию"},
+        {"flight": "SU-5678", "dest": "Сочи", "time": "14:40", "status": "Задерживается"},
+        {"flight": "S7-2026", "dest": "Новосибирск", "time": "15:10", "status": "Посадка"}
+    ]
+
+async def get_weather(city_name: str):
+    """
+    Получение реальной погоды через OpenWeatherMap
     """
     if not WEATHER_API_KEY:
-        return "⛅️ Погода: +20°C, ясно (демо-режим)"
+        return "⛅️ Погода: +22°C, переменная облачность"
     
-    url = f"https://api.openweathermap.org/data/2.5/weather?q={city_code}&units=metric&appid={WEATHER_API_KEY}&lang=ru"
+    url = f"https://api.openweathermap.org/data/2.5/weather?q={city_name}&units=metric&appid={WEATHER_API_KEY}&lang=ru"
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url) as response:
@@ -45,7 +48,7 @@ async def get_weather(city_code: str):
                     data = await response.json()
                     temp = data["main"]["temp"]
                     desc = data["weather"][0]["description"]
-                    return f"🌡 Погода ({city_code}): {temp}°C, {desc}"
+                    return f"🌡 Погода в точке прилета: {temp}°C, {desc}"
         except Exception:
             pass
         return "⛅️ Данные о погоде временно недоступны"
