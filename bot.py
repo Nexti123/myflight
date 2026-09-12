@@ -3,6 +3,7 @@ import logging
 import sys
 import asyncio
 import threading
+import sqlite3
 from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -51,6 +52,7 @@ def send_main_menu(chat_id, name):
     user_states.pop(chat_id, None)
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("✈️ Найти рейс по номеру", callback_data="menu_enter_flight"))
+    markup.add(InlineKeyboardButton("🧳 Мои полеты (Кабинет)", callback_data="menu_my_flights"))
     markup.add(InlineKeyboardButton("🔍 Онлайн-табло аэропорта", callback_data="menu_enter_airport"))
     markup.add(
         InlineKeyboardButton("🛫 Шереметьево (SVO)", callback_data="board_SVO"),
@@ -65,7 +67,7 @@ def send_main_menu(chat_id, name):
         chat_id,
         f"👋 Привет, <b>{name}</b>!\n\n"
         "✈️ <b>Твой персональный тревел-ассистент готов к работе.</b>\n"
-        "Выбери аэропорт для просмотра упорядоченного расписания на весь день или отправь в чат **номер любого рейса**.",
+        "Выбери раздел в меню, открой онлайн-табло или отправь в чат **номер любого рейса**.",
         reply_markup=markup
     )
 
@@ -81,6 +83,33 @@ def callback_enter_airport(call):
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "✍️ <b>Введите 3-буквенный IATA код аэропорта</b>\n(например: <code>JFK</code>, <code>IST</code>, <code>VKO</code>):")
 
+@bot.callback_query_handler(func=lambda call: call.data == "menu_my_flights")
+def callback_my_flights(call):
+    bot.answer_callback_query(call.id)
+    user_id = call.from_user.id
+    
+    # Достаем подписки пользователя из базы данных SQLite
+    try:
+        conn = sqlite3.connect("flights.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT flight_number FROM subscriptions WHERE user_id = ?", (user_id,))
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception:
+        rows = []
+
+    markup = InlineKeyboardMarkup()
+    if rows:
+        for row in rows:
+            f_num = row[0]
+            markup.add(InlineKeyboardButton(f"✈️ Рейс {f_num}", callback_data=f"select_flight_{f_num}"))
+        text = "🧳 <b>Личный кабинет: Ваши активные полеты</b>\nВыберите рейс для просмотра детальной информации:"
+    else:
+        text = "🧳 <b>Личный кабинет пуст.</b>\nУ вас пока нет активных подписок на рейсы. Найдите рейс через поиск или табло и включите уведомления!"
+
+    markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("board_"))
 def callback_board(call):
     user_states.pop(call.message.chat.id, None)
@@ -88,14 +117,14 @@ def callback_board(call):
     parts = call.data.split("_")
     airport_code = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 0
-    show_airport_board(call.message.chat.id, airport_code, page)
+    show_airport_board(call.message.chat.id, airport_code, page, edit_message_id=call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select_flight_"))
 def callback_select_flight(call):
     user_states.pop(call.message.chat.id, None)
     bot.answer_callback_query(call.id)
     flight_num = call.data.split("_")[2]
-    show_flight_card(call.message.chat.id, call.from_user.id, flight_num)
+    show_flight_card(call.message.chat.id, call.from_user.id, flight_num, edit_message_id=call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("toggle_sub_"))
 def callback_toggle_sub(call):
@@ -115,14 +144,37 @@ def callback_toggle_sub(call):
 @bot.callback_query_handler(func=lambda call: call.data == "menu_main")
 def callback_main(call):
     bot.answer_callback_query(call.id)
-    send_main_menu(call.message.chat.id, call.from_user.first_name)
+    
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("✈️ Найти рейс по номеру", callback_data="menu_enter_flight"))
+    markup.add(InlineKeyboardButton("🧳 Мои полеты (Кабинет)", callback_data="menu_my_flights"))
+    markup.add(InlineKeyboardButton("🔍 Онлайн-табло аэропорта", callback_data="menu_enter_airport"))
+    markup.add(
+        InlineKeyboardButton("🛫 Шереметьево (SVO)", callback_data="board_SVO"),
+        InlineKeyboardButton("🛫 Пулково (LED)", callback_data="board_LED")
+    )
+    markup.add(
+        InlineKeyboardButton("🛫 Дубай (DXB)", callback_data="board_DXB"),
+        InlineKeyboardButton("🛫 Анталья (AYT)", callback_data="board_AYT")
+    )
+    
+    text = (
+        f"👋 Привет, <b>{call.from_user.first_name}</b>!\n\n"
+        "✈️ <b>Твой персональный тревел-ассистент готов к работе.</b>\n"
+        "Выбери раздел в меню, открой онлайн-табло или отправь в чат **номер любого рейса**."
+    )
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-def show_airport_board(chat_id, airport_code, page=0):
+def show_airport_board(chat_id, airport_code, page=0, edit_message_id=None):
     board = run_async(get_airport_board(airport_code))
     airport_info = get_airport_details(airport_code)
 
     if not board:
-        bot.send_message(chat_id, f"❌ Не удалось получить расписание для аэропорта <b>{airport_code}</b>.")
+        msg = f"❌ Не удалось получить расписание для аэропорта <b>{airport_code}</b>."
+        if edit_message_id:
+            bot.edit_message_text(msg, chat_id, edit_message_id)
+        else:
+            bot.send_message(chat_id, msg)
         return
 
     per_page = 6
@@ -152,7 +204,11 @@ def show_airport_board(chat_id, airport_code, page=0):
         f"📊 <b>Онлайн-табло на весь день</b> (Страница {page + 1} из {total_pages})\n"
         "<i>Рейсы отсортированы по времени вылета. Нажмите на рейс для деталей:</i>"
     )
-    bot.send_message(chat_id, text, reply_markup=markup)
+    
+    if edit_message_id:
+        bot.edit_message_text(text, chat_id, edit_message_id, reply_markup=markup)
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup)
 
 def show_flight_card(chat_id, user_id, flight_num, edit_message_id=None):
     data = run_async(get_flight_info(flight_num))
@@ -183,18 +239,24 @@ def show_flight_card(chat_id, user_id, flight_num, edit_message_id=None):
         f"🏢 Авиакомпания: {data['airline']}\n"
         f"📌 Статус: <b>{data['status']}</b>\n\n"
         f"🛫 <b>Отправление:</b> {data['departure_airport']}\n"
-        f"🕒 Время вылета: {data['departure_time']}\n\n"
+        f"🕒 Время вылета: {data['departure_time']}\n"
+        f"🚪 Выход (Gate): <b>{data['dep_gate']}</b> | Терминал: {data['dep_terminal']}\n\n"
         f"🛬 <b>Прибытие:</b> {data['arrival_airport']}\n"
         f"🕒 Расчетное время: {data['arrival_time']}\n"
-        f"⏱ В пути: {data['duration']}\n\n"
+        f"🚪 Выход/Прибытие (Gate): <b>{data['arr_gate']}</b> | Терминал: {data['arr_terminal']}\n\n"
+        f"⏰ {data['tz_diff']}\n"
         f"{weather_arr}\n\n"
-        f"🚪 <b>Гейт:</b> {data['gate']} | Терминал: {data['terminal']}\n"
         f"🛩 Воздушное судно: {data['aircraft']}"
     )
     
     markup = InlineKeyboardMarkup()
     sub_btn_text = "🔕 Выключить уведомления" if is_subbed else "🔔 Включить уведомления"
     markup.add(InlineKeyboardButton(sub_btn_text, callback_data=f"toggle_sub_{data['flight']}"))
+    
+    # Если самолет в воздухе, добавляем кнопку карты Flightradar24
+    if data["fr24_link"]:
+        markup.add(InlineKeyboardButton("🗺 Посмотреть на карте (Flightradar24)", url=data["fr24_link"]))
+    
     markup.add(InlineKeyboardButton("👨‍👩‍👧 Поделиться с близкими", url=f"https://t.me/share/url?url={share_link}&text=Следи за моим полетом в реальном времени!"))
     markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
     
@@ -229,7 +291,6 @@ if __name__ == "__main__":
     
     logging.info("🚀 Бот запущен и слушает обновления от Telegram...")
     
-    # Защитный цикл с автопереподключением при любых сбоях и падениях сети
     while True:
         try:
             bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
