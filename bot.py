@@ -201,6 +201,15 @@ def callback_toggle_sub(call):
 def show_airport_board(chat_id, code, page=0, msg_id=None):
     board = run_async(get_airport_board(code))
     info = get_airport_details(code)
+    
+    if not board:
+        text = f"{info}\n\n⚠️ <b>Онлайн-табло временно недоступно.</b>\nУбедитесь, что в переменных окружения на Render прописан актуальный <code>AVIATION_API_KEY</code>."
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
+        if msg_id: bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
+        else: bot.send_message(chat_id, text, reply_markup=markup)
+        return
+
     per_page = 6
     total_pages = (len(board) + per_page - 1) // per_page
     page = max(0, min(page, total_pages - 1))
@@ -215,13 +224,13 @@ def show_airport_board(chat_id, code, page=0, msg_id=None):
     if nav: markup.row(*nav)
     markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
 
-    text = f"{info}\n\n📊 <b>Онлайн-табло</b> (Стр. {page + 1}/{total_pages})"
+    text = f"{info}\n\n📊 <b>Онлайн-табло (Вылеты)</b> (Стр. {page + 1}/{total_pages})"
     if msg_id: bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
     else: bot.send_message(chat_id, text, reply_markup=markup)
 
 def show_flight_card(chat_id, user_id, flight_num, msg_id=None):
     data = run_async(get_flight_info(flight_num))
-    weather = run_async(get_weather(data["arr_query_for_weather"]))
+    weather = run_async(get_weather(data.get("arrival_iata", "LED")))
     is_sub = run_async(check_subscription(flight_num, user_id))
     bot_info = bot.get_me()
     share_link = f"https://t.me/{bot_info.username}?start=flight_{data['flight']}"
@@ -231,9 +240,9 @@ def show_flight_card(chat_id, user_id, flight_num, msg_id=None):
         f"🏢 Авиакомпания: {data['airline']}\n"
         f"📌 Статус: <b>{data['status']}</b>\n\n"
         f"🛫 <b>Отправление:</b> {data['departure_airport']}\n"
-        f"🕒 Время: {data['departure_time']} | Гейт: <b>{data['dep_gate']}</b> (Терминал {data['dep_terminal']})\n\n"
+        f"🕒 Время: {data['departure_time']} | Гейт: <b>{data['dep_gate']}</b> (Терминал: {data['dep_terminal']})\n\n"
         f"🛬 <b>Прибытие:</b> {data['arrival_airport']}\n"
-        f"🕒 Время: {data['arrival_time']} | Гейт: <b>{data['arr_gate']}</b> (Терминал {data['arr_terminal']})\n\n"
+        f"🕒 Время: {data['arrival_time']} | Гейт: <b>{data['arr_gate']}</b> (Терминал: {data['arr_terminal']})\n\n"
         f"⏰ {data['tz_diff']}\n"
         f"{weather}\n\n"
         f"🛩 Судно: {data['aircraft']}"
