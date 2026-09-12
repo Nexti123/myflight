@@ -228,4 +228,12 @@ if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port), daemon=True).start()
     
     logging.info("🚀 Бот запущен и слушает обновления от Telegram...")
-    bot.infinity_polling(skip_pending=True)
+    
+    # Защитный цикл с автопереподключением при любых сбоях и падениях сети
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
+        except Exception as e:
+            logging.error(f"❌ Ошибка в работе бота: {e}. Переподключение через 5 секунд...")
+            import time
+            time.sleep(5)
