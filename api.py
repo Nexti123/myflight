@@ -220,8 +220,11 @@ async def get_weather(city_query: str):
                     text = (await response.text()).strip()
                     if "html" not in text.lower() and len(text) < 40:
                         advice = " 🧥 Комфортная погода."
-                        if any(w in text.lower() for w in ["rain", "дождь"]): advice = " ☂️ Возьмите зонт!"
+                        if any(w in text.lower() for w in ["rain", "дождь"]): 
+                            advice = " ☂️ Возьмите зонт!"
                         return f"🌡 Погода: {text}.{advice}"
         except Exception:
             pass
-        return "🌡 Погода в пункте назначения: +22°C, ясно"
+        
+    # Больше никаких левых +22°C — честно возвращаем статус отсутствия данных
+    return "🌡 Погода временно недоступна"
