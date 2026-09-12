@@ -3,14 +3,30 @@ import aiohttp
 
 AIRLABS_API_KEY = os.getenv("AIRLABS_API_KEY", "")
 
+# Координаты для основных аэропортов (чтобы не делать лишний запрос геокодинга)
+AIRPORT_COORDS = {
+    "SVO": (55.9726, 37.4146),  # Шереметьево / Москва
+    "DME": (55.4088, 37.9063),  # Домодедово / Москва
+    "VKO": (55.5915, 37.2615),  # Внуково / Москва
+    "LED": (59.8003, 30.2625),  # Пулково / Санкт-Петербург
+    "OVB": (55.0126, 82.6507),  # Толмачево / Новосибирск
+    "AER": (43.4499, 39.9566),  # Сочи
+    "SVX": (56.7431, 60.8027),  # Кольцово / Екатеринбург
+    "KZN": (55.6062, 49.2787),  # Казань
+    "KUF": (53.5049, 50.1643),  # Самара
+    "VVO": (43.3990, 132.1480), # Владивосток
+    "DXB": (25.2532, 55.3657),  # Дубай
+    "IST": (41.2753, 28.7519),  # Стамбул
+    "AYT": (36.8987, 30.8005),  # Анталья
+}
+
 async def get_flight_info(flight_number: str):
-    # Очищаем номер рейса (например, "S7-2514" -> "S72514")
     raw_flight = flight_number.upper().replace(" ", "").replace("-", "")
     
     result = {
         "flight": raw_flight,
-        "airline": "S7 Airlines" if raw_flight.startswith("S7") else ("Аэрофлот" if raw_flight.startswith("SU") else "Авиакомпания"),
-        "status": "Запланирован ✈️",
+        "airline": "Авиакомпания не указана",
+        "status": "Информация уточняется ✈️",
         "departure_airport": "Не указано",
         "departure_iata": "",
         "arrival_airport": "Не указано",
@@ -21,7 +37,7 @@ async def get_flight_info(flight_number: str):
         "dep_terminal": "Не указан",
         "arr_gate": "Не указан",
         "arr_terminal": "Не указан",
-        "aircraft": "Airbus A320 / Boeing 737",
+        "aircraft": "Не указано",
         "tz_diff": "Часовые пояса совпадают",
         "fr24_link": f"https://www.flightradar24.com/data/flights/{raw_flight.lower()}",
         "arr_query_for_weather": ""
@@ -30,7 +46,6 @@ async def get_flight_info(flight_number: str):
     if not AIRLABS_API_KEY:
         return result
 
-    # 1. Сначала ищем в расписании (подойдет для будущих/невылетевших рейсов)
     sched_url = f"https://airlabs.co/api/v9/schedules?flight_iata={raw_flight}&api_key={AIRLABS_API_KEY}"
     
     async with aiohttp.ClientSession() as session:
@@ -61,12 +76,10 @@ async def get_flight_info(flight_number: str):
                         result["arr_gate"] = flight_data.get("arr_gate", "Не указан") or "Не указан"
                         result["arr_query_for_weather"] = result["arrival_iata"] or result["arrival_airport"]
                         
-                        # Если нашли рейс в расписании, отдаем результат
                         return result
         except Exception as e:
             print(f"AirLabs schedules error: {e}")
 
-        # 2. Если в расписании не нашли, пробуем эндпоинт активных рейсов (онлайн)
         flight_url = f"https://airlabs.co/api/v9/flight?flight_iata={raw_flight}&api_key={AIRLABS_API_KEY}"
         try:
             async with session.get(flight_url, timeout=8) as resp:
@@ -82,3 +95,81 @@ async def get_flight_info(flight_number: str):
             print(f"AirLabs live error: {e}")
 
     return result
+
+async def get_weather(location: str):
+    """Полностью динамическое получение реальной погоды по любому городу/аэропорту"""
+    if not location:
+        return "Данные о погоде недоступны"
+    
+    loc_clean = location.upper().strip()
+    lat, lon = None, None
+    
+    # 1. Если IATA-код есть в нашей базе
+    if loc_clean in AIRPORT_COORDS:
+        lat, lon = AIRPORT_COORDS[loc_clean]
+    else:
+        # 2. Если аэропорта нет в словаре, геокодим город на лету через Open-Meteo Geocoding
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1"
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(geo_url, timeout=5) as g_resp:
+                    if g_resp.status == 200:
+                        g_data = await g_resp.json()
+                        results = g_data.get("results")
+                        if results:
+                            lat = results[0]["latitude"]
+                            lon = results[0]["longitude"]
+            except Exception as e:
+                print(f"Geocoding error: {e}")
+
+    if lat is None or lon is None:
+        return "🌡 Погода: город не найден"
+
+    # 3. Запрос реальной текущей температуры по точным координатам
+    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(weather_url, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    current = data.get("current_weather", {})
+                    temp = current.get("temperature")
+                    if temp is not None:
+                        return f"🌡 Погода в пункте назначения: {round(temp)}°C"
+        except Exception as e:
+            print(f"Open-Meteo error: {e}")
+            
+    return "🌡 Погода: данные недоступны"
+
+async def get_airport_board(airport_code: str):
+    """Реальное онлайн-табло вылетов аэропорта"""
+    airport_code = airport_code.upper().strip()
+    board_list = []
+    
+    if AIRLABS_API_KEY:
+        url = f"https://airlabs.co/api/v9/schedules?dep_iata={airport_code}&api_key={AIRLABS_API_KEY}"
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, timeout=8) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for flight in data.get("response", [])[:30]:
+                            f_num = flight.get("flight_iata") or flight.get("flight_number") or "Рейс"
+                            arr_info = flight.get("arr_iata") or flight.get("arr_name") or "Назначение"
+                            dep_time_raw = flight.get("dep_time", "00:00")
+                            time_disp = dep_time_raw.split(" ")[1][:5] if " " in dep_time_raw else dep_time_raw[:5]
+                            board_list.append({
+                                "flight": f_num, 
+                                "dest": arr_info, 
+                                "time": time_disp, 
+                                "sort_key": time_disp
+                            })
+            except Exception as e:
+                print(f"Airport board error: {e}")
+
+    board_list.sort(key=lambda x: x["sort_key"])
+    return board_list
+
+def get_airport_details(airport_code: str):
+    airport_code = airport_code.upper().strip()
+    return f"🏢 <b>Аэропорт:</b> {airport_code}"
