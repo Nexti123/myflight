@@ -45,11 +45,11 @@ def get_main_menu_markup():
     markup.add(InlineKeyboardButton("🔍 Онлайн-табло аэропорта", callback_data="menu_enter_airport"))
     markup.add(
         InlineKeyboardButton("🛫 Шереметьево (SVO)", callback_data="board_SVO"),
-        InlineKeyboardButton("🛫 Пулково (LED)", callback_data="board_LED")
+        InlineKeyboardButton("🛫 Домодедово (DME)", callback_data="board_DME")
     )
     markup.add(
-        InlineKeyboardButton("🛫 Дубай (DXB)", callback_data="board_DXB"),
-        InlineKeyboardButton("🛫 Анталья (AYT)", callback_data="board_AYT")
+        InlineKeyboardButton("🛫 Толмачево (OVB)", callback_data="board_OVB"),
+        InlineKeyboardButton("🛫 Пулково (LED)", callback_data="board_LED")
     )
     return markup
 
@@ -89,7 +89,7 @@ def callback_enter_flight(call):
 def callback_enter_airport(call):
     user_states[call.message.chat.id] = "waiting_airport"
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "✍️ <b>Введите 3-буквенный IATA код аэропорта</b> (например: <code>SVO</code>, <code>JFK</code>):")
+    bot.send_message(call.message.chat.id, "✍️ <b>Введите 3-буквенный IATA код аэропорта</b> (например: <code>SVO</code>, <code>OVB</code>, <code>DME</code>):")
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_my_flights")
 def callback_my_flights(call):
@@ -113,7 +113,7 @@ def callback_my_flights(call):
             markup.add(InlineKeyboardButton(f"✈️ Рейс {f_num}", callback_data=f"select_flight_{f_num}"))
         text = "🧳 <b>Личный кабинет: Ваши подписки</b>\nНажмите на рейс для просмотра актуальных данных:"
     else:
-        text = "🧳 <b>Личный кабинет пуст.</b>\nУ вас нет сохраненных рейсов. Найдите рейс через поиск или табло и включите уведомления!"
+        text = "🧳 <b>Личный кабинет пуст.</b>\nУ вас нет сохраненных рейсов."
 
     markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
@@ -163,22 +163,22 @@ def callback_transfer(call):
     bot.answer_callback_query(call.id)
     parts = call.data.split("_")
     flight_num = parts[1]
-    dep_iata = parts[2] if len(parts) > 2 else "SVO"
+    dep_iata = parts[2] if len(parts) > 2 else "OVB"
     
     user_states[call.message.chat.id] = f"waiting_transfer_{flight_num}_{dep_iata}"
-    bot.send_message(call.message.chat.id, f"⏱ <b>Умный Трансфер для рейса {flight_num}</b>\nВведите ваш реальный адрес (например: <i>Москва, Тверская 12</i> или <i>Новосибирск, Красный проспект</i>):")
+    bot.send_message(call.message.chat.id, f"⏱ <b>Умный Трансфер для рейса {flight_num}</b>\nВведите ваш адрес отправления (например: <i>Красный проспект 100</i> или <i>ул. Тверская 12</i>):")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("export_ics_"))
 def callback_ics(call):
     bot.answer_callback_query(call.id, "📅 Готово!")
-    bot.send_message(call.message.chat.id, f"📅 <b>Календарь:</b> Рейс {call.data.split('_')[2]} учтен. Поставьте будильник за 4 часа до вылета.")
+    bot.send_message(call.message.chat.id, f"📅 <b>Календарь:</b> Рейс {call.data.split('_')[2]} сохранен. Поставьте будильник за 4 часа до вылета.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("board_"))
 def callback_board(call):
     user_states.pop(call.message.chat.id, None)
     bot.answer_callback_query(call.id)
-    parts = call.data.split("_")
-    show_airport_board(call.message.chat.id, parts[1], int(parts[2]) if len(parts) > 2 else 0, call.message.message_id)
+    code = call.data.split("_")[1]
+    show_airport_board(call.message.chat.id, code, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select_flight_"))
 def callback_select_flight(call):
@@ -198,35 +198,35 @@ def callback_toggle_sub(call):
         bot.answer_callback_query(call.id, "🔔 Уведомления включены!")
     show_flight_card(call.message.chat.id, user_id, flight_num, call.message.message_id)
 
-def show_airport_board(chat_id, code, page=0, msg_id=None):
+def show_airport_board(chat_id, code, msg_id=None):
     board = run_async(get_airport_board(code))
     info = get_airport_details(code)
     
     if not board:
-        text = f"{info}\n\n⚠️ <b>Онлайн-табло временно недоступно.</b>\nУбедитесь, что в переменных окружения на Render прописан актуальный <code>YANDEX_RASP_API_KEY</code>."
+        text = f"{info}\n\n⚠️ <b>Онлайн-табло временно недоступно.</b>\nПроверьте переменную <code>YANDEX_RASP_API_KEY</code> на Render."
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
         if msg_id: bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
         else: bot.send_message(chat_id, text, reply_markup=markup)
         return
 
-    per_page = 6
-    total_pages = (len(board) + per_page - 1) // per_page
-    page = max(0, min(page, total_pages - 1))
+    # Вывод полного списка рейсов на весь день
+    lines = [f"{info}\n\n📊 <b>Онлайн-табло вылетов на сегодня:</b>\n"]
+    for f in board[:35]:  # Ограничение по длине телеграм-сообщения
+        lines.append(f"⏱ <code>{f['time']}</code> | <b>{f['flight']}</b> ➔ {f['dest']}")
+
+    text_content = "\n".join(lines)
     
     markup = InlineKeyboardMarkup()
-    for f in board[page * per_page : (page + 1) * per_page]:
-        markup.add(InlineKeyboardButton(f"{f['time']} | {f['flight']} ➔ {f['dest']}", callback_data=f"select_flight_{f['flight']}"))
-    
-    nav = []
-    if page > 0: nav.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"board_{code}_{page - 1}"))
-    if page < total_pages - 1: nav.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"board_{code}_{page + 1}"))
-    if nav: markup.row(*nav)
     markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
 
-    text = f"{info}\n\n📊 <b>Онлайн-табло (Вылеты)</b> (Стр. {page + 1}/{total_pages})"
-    if msg_id: bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
-    else: bot.send_message(chat_id, text, reply_markup=markup)
+    if msg_id:
+        try:
+            bot.edit_message_text(text_content, chat_id, msg_id, reply_markup=markup)
+        except Exception:
+            bot.send_message(chat_id, text_content, reply_markup=markup)
+    else:
+        bot.send_message(chat_id, text_content, reply_markup=markup)
 
 def show_flight_card(chat_id, user_id, flight_num, msg_id=None):
     data = run_async(get_flight_info(flight_num))
@@ -285,13 +285,13 @@ def handle_all_text(message):
         dep_iata = parts[3]
         user_states.pop(chat_id, None)
         
-        bot.send_message(chat_id, "🛰 Ищу координаты адреса на карте и считаю расстояние...")
+        bot.send_message(chat_id, "🛰 Прокладываем автомобильный маршрут...")
         transfer_data = run_async(calculate_real_transfer(text, dep_iata))
         
         if not transfer_data:
             bot.send_message(
                 chat_id, 
-                "❌ Не удалось точно определить этот адрес на карте. Попробуйте написать точнее (например: <i>Москва, ул. Тверская 1</i>).",
+                "❌ Не удалось проложить маршрут по данному адресу. Укажите город и улицу точнее (например: <i>Новосибирск, Красный проспект 100</i> или <i>Москва, Тверская 12</i>).",
                 reply_markup=get_main_menu_markup()
             )
             return
@@ -300,7 +300,7 @@ def handle_all_text(message):
         t_str = transfer_data["time_str"]
         total_mins = transfer_data["total_minutes"]
         
-        airport_buffer = 150
+        airport_buffer = 150  # 2.5 часа на регистрацию и досмотр
         total_needed_mins = total_mins + airport_buffer
         
         rec_hours = total_needed_mins // 60
@@ -308,11 +308,11 @@ def handle_all_text(message):
         
         bot.send_message(
             chat_id,
-            f"📍 <b>Точный расчет трансфера для рейса {flight_num}:</b>\n\n"
-            f"🛣 Прямое расстояние до аэропорта: <b>{dist} км</b>\n"
-            f"🚗 Время в пути на авто: ~<b>{t_str}</b>\n"
-            f"⏱ Запас в аэропорту (регистрация/досмотр): <b>2.5 часа</b>\n\n"
-            f"🚨 <b>Итог: Рекомендуем выехать из дома за {rec_hours} ч. {rec_mins} мин. до вылета!</b>",
+            f"📍 <b>Расчет трансфера для рейса {flight_num}:</b>\n\n"
+            f"🛣 Дистанция до аэропорта: <b>{dist} км</b>\n"
+            f"🚗 Время в дороге на авто: <b>{t_str}</b>\n"
+            f"⏱ Запас на регистрацию и регистрацию: <b>2 ч. 30 мин.</b>\n\n"
+            f"🚨 <b>Выезжайте за {rec_hours} ч. {rec_mins} мин. до вылета!</b>",
             reply_markup=get_main_menu_markup()
         )
         return
