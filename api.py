@@ -3,7 +3,7 @@ import aiohttp
 
 AIRLABS_API_KEY = os.getenv("AIRLABS_API_KEY", "")
 
-# Координаты для основных аэропортов (чтобы не делать лишний запрос геокодинга)
+# Координаты для основных аэропортов
 AIRPORT_COORDS = {
     "SVO": (55.9726, 37.4146),  # Шереметьево / Москва
     "DME": (55.4088, 37.9063),  # Домодедово / Москва
@@ -97,18 +97,16 @@ async def get_flight_info(flight_number: str):
     return result
 
 async def get_weather(location: str):
-    """Полностью динамическое получение реальной погоды по любому городу/аэропорту"""
+    """Динамическое получение реальной погоды через Open-Meteo"""
     if not location:
         return "Данные о погоде недоступны"
     
     loc_clean = location.upper().strip()
     lat, lon = None, None
     
-    # 1. Если IATA-код есть в нашей базе
     if loc_clean in AIRPORT_COORDS:
         lat, lon = AIRPORT_COORDS[loc_clean]
     else:
-        # 2. Если аэропорта нет в словаре, геокодим город на лету через Open-Meteo Geocoding
         geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1"
         async with aiohttp.ClientSession() as session:
             try:
@@ -125,7 +123,6 @@ async def get_weather(location: str):
     if lat is None or lon is None:
         return "🌡 Погода: город не найден"
 
-    # 3. Запрос реальной текущей температуры по точным координатам
     weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
     async with aiohttp.ClientSession() as session:
         try:
@@ -140,6 +137,70 @@ async def get_weather(location: str):
             print(f"Open-Meteo error: {e}")
             
     return "🌡 Погода: данные недоступны"
+
+async def calculate_real_transfer(airport_code: str, address: str = "Центр города"):
+    """Реальный расчет трансфера через OSRM и геокодинг"""
+    if not airport_code:
+        return "Не удалось рассчитать трансфер"
+        
+    airport_code = airport_code.upper().strip()
+    
+    # 1. Координаты аэропорта
+    if airport_code in AIRPORT_COORDS:
+        a_lat, a_lon = AIRPORT_COORDS[airport_code]
+    else:
+        a_lat, a_lon = None, None
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={airport_code}&count=1"
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(geo_url, timeout=5) as resp:
+                    if resp.status == 200:
+                        g_data = await resp.json()
+                        results = g_data.get("results")
+                        if results:
+                            a_lat = results[0]["latitude"]
+                            a_lon = results[0]["longitude"]
+            except Exception:
+                pass
+
+    if a_lat is None or a_lon is None:
+        return "Расчет трансфера: аэропорт не найден"
+
+    # 2. Координаты точки назначения
+    target_name = address if address else "Центр города"
+    d_lat, d_lon = None, None
+    geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={target_name}&count=1"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(geo_url, timeout=5) as resp:
+                if resp.status == 200:
+                    g_data = await resp.json()
+                    results = g_data.get("results")
+                    if results:
+                        d_lat = results[0]["latitude"]
+                        d_lon = results[0]["longitude"]
+            except Exception:
+                pass
+
+    if d_lat is None or d_lon is None:
+        d_lat, d_lon = a_lat + 0.15, a_lon + 0.15
+
+    # 3. Запрос времени в пути через OSRM
+    osrm_url = f"http://router.project-osrm.org/route/v1/driving/{a_lon},{a_lat};{d_lon},{d_lat}?overview=false"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(osrm_url, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    routes = data.get("routes", [])
+                    if routes:
+                        duration_min = int(routes[0]["duration"] / 60)
+                        distance_km = round(routes[0]["distance"] / 1000, 1)
+                        return f"🚗 Трансфер на авто: ~{duration_min} мин ({distance_km} км)"
+        except Exception as e:
+            print(f"OSRM error: {e}")
+
+    return "Расчет трансфера временно недоступен"
 
 async def get_airport_board(airport_code: str):
     """Реальное онлайн-табло вылетов аэропорта"""
