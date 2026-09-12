@@ -56,20 +56,27 @@ async def get_airport_board(airport_code: str):
                         thread = item.get("thread", {})
                         f_num = thread.get("number") or "Рейс"
                         
-                        # Достаем город назначения
+                        # Достаем направление
                         dest = item.get("to", {}).get("title") or thread.get("title", "Пункт назначения")
                         
-                        # Достаем время HH:MM без мусора от ISO-формата
-                        time_raw = item.get("departure", "")
+                        # Парсинг всех вариантов времени от Яндекса
+                        time_raw = str(item.get("departure") or item.get("time") or "")
                         time_str = "--:--"
-                        if time_raw and "T" in time_raw:
+                        
+                        if "T" in time_raw:
                             time_str = time_raw.split("T")[1][:5]
+                        elif " " in time_raw:
+                            time_str = time_raw.split(" ")[1][:5]
+                        elif len(time_raw) >= 5 and ":" in time_raw:
+                            time_str = time_raw[:5]
 
                         board_list.append({
                             "flight": str(f_num),
                             "dest": str(dest)[:20],
                             "time": time_str
                         })
+                else:
+                    print(f"Яндекс ответил ошибкой: статус {resp.status}")
         except Exception as e:
             print(f"Ошибка запроса к Яндекс.Расписаниям: {e}")
 
