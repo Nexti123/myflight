@@ -9,7 +9,6 @@ AIRLINE_PREFIX_MAP = {
     "UT": "UTA", "DP": "PBD", "EK": "UAE", "TK": "THY", "FZ": "FDB"
 }
 
-# Координаты основных аэропортов для точного расчета расстояний и времени трансфера
 AIRPORT_INFO_MAP = {
     "SVO": {"name": "Шереметьево", "city": "Москва", "country": "Россия", "tz": 3, "lat": 55.9726, "lon": 37.4146},
     "DME": {"name": "Домодедово", "city": "Москва", "country": "Россия", "tz": 3, "lat": 55.4088, "lon": 37.9063},
@@ -121,7 +120,6 @@ async def get_flight_info(flight_number: str):
         "arr_query_for_weather": arr_city
     }
 
-# РЕАЛЬНЫЙ геокодер через OpenStreetMap Nominatim
 async def get_coordinates_by_address(address: str):
     url = f"https://nominatim.openstreetmap.org/search?q={address}&format=json&limit=1"
     headers = {"User-Agent": "FlightTrackerBot/2.0"}
@@ -136,7 +134,6 @@ async def get_coordinates_by_address(address: str):
             pass
     return None
 
-# Точный расчет расстояния по формуле гаверсинусов (в км)
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
@@ -150,14 +147,12 @@ async def calculate_real_transfer(address: str, dep_iata: str):
     airport_info = AIRPORT_INFO_MAP.get(dep_iata)
     
     if not coords or not airport_info:
-        return None # Если адрес не найден на карте
+        return None
         
     user_lat, user_lon = coords
     ap_lat, ap_lon = airport_info["lat"], airport_info["lon"]
     
     distance_km = calculate_distance(user_lat, user_lon, ap_lat, ap_lon)
-    
-    # Средняя скорость движения с учетом городской застройки и трассы (~50 км/ч)
     avg_speed = 50.0
     travel_hours = distance_km / avg_speed
     total_minutes = int(travel_hours * 60)
@@ -225,6 +220,6 @@ async def get_weather(city_query: str):
                         return f"🌡 Погода: {text}.{advice}"
         except Exception:
             pass
-        
-    # Больше никаких левых +22°C — честно возвращаем статус отсутствия данных
+            
+    # Никаких левых +22°C — честный ответ при сбое погоды
     return "🌡 Погода временно недоступна"
