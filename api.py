@@ -3,13 +3,13 @@ import aiohttp
 from datetime import datetime
 
 AIRPORT_DATA = {
-    "SVO": {"coords": (55.9726, 37.4146), "name": "Шереметьево (Москва)", "code": "s9600213"},
-    "DME": {"coords": (55.4088, 37.9063), "name": "Домодедово (Москва)", "code": "s9600216"},
-    "VKO": {"coords": (55.5915, 37.2615), "name": "Внуково (Москва)", "code": "s9600215"},
-    "LED": {"coords": (59.8003, 30.2625), "name": "Пулково (Санкт-Петербург)", "code": "s9600370"},
-    "OVB": {"coords": (55.0126, 82.6507), "name": "Толмачево (Новосибирск)", "code": "s9600366"},
-    "DXB": {"coords": (25.2532, 55.3657), "name": "Дубай", "code": "s9632080"},
-    "AYT": {"coords": (36.8987, 30.8005), "name": "Анталья", "code": "s9632093"},
+    "SVO": {"coords": (55.9726, 37.4146), "name": "Шереметьево (Москва)", "code": "s9600213", "city": "Москва"},
+    "DME": {"coords": (55.4088, 37.9063), "name": "Домодедово (Москва)", "code": "s9600216", "city": "Москва"},
+    "VKO": {"coords": (55.5915, 37.2615), "name": "Внуково (Москва)", "code": "s9600215", "city": "Москва"},
+    "LED": {"coords": (59.8003, 30.2625), "name": "Пулково (Санкт-Петербург)", "code": "s9600370", "city": "Санкт-Петербург"},
+    "OVB": {"coords": (55.0126, 82.6507), "name": "Толмачево (Новосибирск)", "code": "s9600366", "city": "Новосибирск"},
+    "DXB": {"coords": (25.2532, 55.3657), "name": "Дубай", "code": "s9632080", "city": "Дубай"},
+    "AYT": {"coords": (36.8987, 30.8005), "name": "Анталья", "code": "s9632093", "city": "Анталья"},
 }
 
 API_KEY = os.getenv("YANDEX_RASP_API_KEY")
@@ -38,65 +38,44 @@ async def get_flight_info(flight_number: str):
 
 async def get_airport_board(airport_code: str):
     code = airport_code.upper().strip()
-    
     if not API_KEY:
         print("YANDEX_RASP_API_KEY не установлен!")
         return None
 
     station_code = AIRPORT_DATA.get(code, {}).get("code", code)
-    
-    # Используем текущую дату для запроса оперативного табло
     today_str = datetime.now().strftime("%Y-%m-%d")
-    url = f"https://api.rasp.yandex.net/v3.0/search/?apikey={API_KEY}&station={station_code}&transport_types=plane&event=departure&date={today_str}"
+    
+    # Запрашиваем полный суточный список расписания станции
+    url = f"https://api.rasp.yandex.net/v3.0/schedule/?apikey={API_KEY}&station={station_code}&transport_types=plane&event=departure&date={today_str}"
 
     board_list = []
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, timeout=10) as resp:
+            async with session.get(url, timeout=12) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    # Если search не отдаст, пробуем schedule с датой
-                    segments = data.get("segments") or data.get("schedule") or []
+                    schedule = data.get("schedule", [])
                     
-                    for item in segments[:20]:
+                    # Выбираем все вылеты за день (до 80 рейсов сразу)
+                    for item in schedule[:80]:
                         thread = item.get("thread", {})
-                        
-                        # Номер рейса
                         f_num = thread.get("number") or item.get("number") or "Рейс"
+                        dest = item.get("to", {}).get("title") or thread.get("title", "Пункт назначения")
                         
-                        # Пункт назначения
-                        to_data = item.get("to", {})
-                        dest = to_data.get("title") or thread.get("title") or "Пункт назначения"
-                        
-                        # Извлекаем реальное время вылета на сегодня
                         dep_time = item.get("departure") or item.get("time") or ""
                         time_str = "--:--"
-                        
                         if "T" in str(dep_time):
                             time_str = str(dep_time).split("T")[1][:5]
                         elif " " in str(dep_time):
                             time_str = str(dep_time).split(" ")[1][:5]
-                        elif len(str(dep_time)) >= 5:
+                        elif len(str(dep_time)) >= 5 and ":" in str(dep_time):
                             time_str = str(dep_time)[:5]
 
                         board_list.append({
                             "flight": str(f_num),
-                            "dest": str(dest)[:20],
+                            "dest": str(dest)[:22],
                             "time": time_str
                         })
-                else:
-                    # Резервный запрос через schedule с указанием даты
-                    fallback_url = f"https://api.rasp.yandex.net/v3.0/schedule/?apikey={API_KEY}&station={station_code}&transport_types=plane&event=departure&date={today_str}"
-                    async with session.get(fallback_url, timeout=10) as f_resp:
-                        if f_resp.status == 200:
-                            f_data = await f_resp.json()
-                            for item in f_data.get("schedule", [])[:20]:
-                                thread = item.get("thread", {})
-                                f_num = thread.get("number") or "Рейс"
-                                dest = item.get("to", {}).get("title") or thread.get("title", "Пункт назначения")
-                                dep_time = item.get("departure") or item.get("time") or ""
-                                time_str = str(dep_time).split("T")[1][:5] if "T" in str(dep_time) else "--:--"
-                                board_list.append({"flight": str(f_num), "dest": str(dest)[:20], "time": time_str})
         except Exception as e:
             print(f"Ошибка запроса к Яндекс.Расписаниям: {e}")
 
@@ -137,9 +116,15 @@ async def get_weather(location: str):
 
 async def calculate_real_transfer(address: str, airport_code: str = "OVB"):
     airport_code = airport_code.upper().strip()
-    a_lat, a_lon = AIRPORT_DATA.get(airport_code, {}).get("coords", (55.0126, 82.6507))
+    airport_info = AIRPORT_DATA.get(airport_code, {"coords": (55.0126, 82.6507), "city": "Новосибирск"})
+    a_lat, a_lon = airport_info["coords"]
+    city_context = airport_info.get("city", "")
 
-    geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={address}&count=1"
+    # Попытка 1: Поиск по введенному адресу + контекст города
+    query = f"{address}, {city_context}" if city_context and city_context.lower() not in address.lower() else address
+    geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={query}&count=1"
+    
+    d_lat, d_lon = None, None
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(geo_url, timeout=5) as resp:
@@ -147,15 +132,30 @@ async def calculate_real_transfer(address: str, airport_code: str = "OVB"):
                     results = (await resp.json()).get("results")
                     if results:
                         d_lat, d_lon = results[0]["latitude"], results[0]["longitude"]
-                    else:
-                        return None
         except Exception:
-            return None
+            pass
 
-    osrm_url = f"http://router.project-osrm.org/route/v1/driving/{a_lon},{a_lat};{d_lon},{d_lat}?overview=false"
+    # Попытка 2: Запасной геокодинг без уточнения города
+    if not d_lat:
+        fallback_geo = f"https://geocoding-api.open-meteo.com/v1/search?name={address}&count=1"
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(fallback_geo, timeout=5) as resp:
+                    if resp.status == 200:
+                        results = (await resp.json()).get("results")
+                        if results:
+                            d_lat, d_lon = results[0]["latitude"], results[0]["longitude"]
+            except Exception:
+                pass
+
+    if not d_lat or not d_lon:
+        return None
+
+    # Построение автомобильного маршрута через OSRM
+    osrm_url = f"http://router.project-osrm.org/route/v1/driving/{d_lon},{d_lat};{a_lon},{a_lat}?overview=false"
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(osrm_url, timeout=5) as resp:
+            async with session.get(osrm_url, timeout=6) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     routes = data.get("routes", [])
