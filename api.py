@@ -2,28 +2,26 @@ import os
 import aiohttp
 
 AIRPORT_DATA = {
-    "SVO": {"coords": (55.9726, 37.4146), "name": "Шереметьево (Москва)"},
-    "DME": {"coords": (55.4088, 37.9063), "name": "Домодедово (Москва)"},
-    "VKO": {"coords": (55.5915, 37.2615), "name": "Внуково (Москва)"},
-    "LED": {"coords": (59.8003, 30.2625), "name": "Пулково (Санкт-Петербург)"},
-    "OVB": {"coords": (55.0126, 82.6507), "name": "Толмачево (Новосибирск)"},
-    "DXB": {"coords": (25.2532, 55.3657), "name": "Дубай"},
-    "AYT": {"coords": (36.8987, 30.8005), "name": "Анталья"},
+    "SVO": {"coords": (55.9726, 37.4146), "name": "Шереметьево (Москва)", "code": "s9600213"},
+    "DME": {"coords": (55.4088, 37.9063), "name": "Домодедово (Москва)", "code": "s9600216"},
+    "VKO": {"coords": (55.5915, 37.2615), "name": "Внуково (Москва)", "code": "s9600215"},
+    "LED": {"coords": (59.8003, 30.2625), "name": "Пулково (Санкт-Петербург)", "code": "s9600370"},
+    "OVB": {"coords": (55.0126, 82.6507), "name": "Толмачево (Новосибирск)", "code": "s9600366"},
+    "DXB": {"coords": (25.2532, 55.3657), "name": "Дубай", "code": "s9632080"},
+    "AYT": {"coords": (36.8987, 30.8005), "name": "Анталья", "code": "s9632093"},
 }
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-}
+API_KEY = os.getenv("YANDEX_RASP_API_KEY")
 
 async def get_flight_info(flight_number: str):
     raw_flight = flight_number.upper().replace(" ", "").replace("-", "")
     return {
         "flight": raw_flight,
         "airline": "Авиакомпания",
-        "status": "Актуальный статус на Flightradar24",
-        "departure_airport": "Уточняется",
+        "status": "Отслеживается на Flightradar24 ✈️",
+        "departure_airport": "Информация в табло",
         "departure_iata": "OVB",
-        "arrival_airport": "Уточняется",
+        "arrival_airport": "Информация в табло",
         "arrival_iata": "DME",
         "departure_time": "--:--",
         "arrival_time": "--:--",
@@ -32,52 +30,45 @@ async def get_flight_info(flight_number: str):
         "arr_gate": "—",
         "arr_terminal": "—",
         "tz_diff": "",
+        "aircraft": "—",
         "fr24_link": f"https://www.flightradar24.com/data/flights/{raw_flight.lower()}",
         "arr_query_for_weather": "Москва"
     }
 
 async def get_airport_board(airport_code: str):
     code = airport_code.upper().strip()
-    board_list = []
-
-    # Пробуем запросить через публичный JSON-эндпоинт Яндекс Расписаний
-    url = f"https://rasp.yandex.ru/informers/airport/{code}/board.json"
     
-    async with aiohttp.ClientSession(headers=HEADERS) as session:
+    if not API_KEY:
+        print("YANDEX_RASP_API_KEY не установлен!")
+        return None
+
+    station_code = AIRPORT_DATA.get(code, {}).get("code", code)
+    url = f"https://api.rasp.yandex.net/v3.0/schedule/?apikey={API_KEY}&station={station_code}&transport_types=plane&event=departure"
+
+    board_list = []
+    async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, timeout=5) as resp:
+            async with session.get(url, timeout=8) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    # Парсим секцию вылетов, если она есть в ответе яндекса
-                    departures = data.get("schedule", {}).get("departures", [])
-                    for item in departures:
+                    schedule = data.get("schedule", [])
+                    for item in schedule[:20]:
                         thread = item.get("thread", {})
-                        f_num = thread.get("number") or thread.get("short_title", "Рейс")
-                        dest = item.get("to", {}).get("title", "Назначение")
-                        time_val = item.get("departure", "")
+                        f_num = thread.get("number") or "Рейс"
+                        dest = item.get("to", {}).get("title", "Пункт назначения")
                         
-                        if "T" in time_val:
-                            time_str = time_val.split("T")[1][:5]
-                        elif ":" in time_val:
-                            time_str = time_val[:5]
-                        else:
-                            time_str = "--:--"
+                        time_raw = item.get("departure", "")
+                        time_str = time_raw[11:16] if "T" in time_raw else "--:--"
 
                         board_list.append({
                             "flight": str(f_num),
-                            "dest": str(dest),
-                            "time": str(time_str),
-                            "sort_key": str(time_str)
+                            "dest": str(dest)[:20],
+                            "time": time_str
                         })
         except Exception as e:
-            print(f"API board fetch error for {code}: {e}")
+            print(f"Ошибка запроса к Яндекс.Расписаниям: {e}")
 
-    # Если Яндекс отдал пустой ответ или заблокировал, возвращаем пустой массив, 
-    # а не фейковые рейсы, чтобы бот честно сказал, что табло временно недоступно.
-    if board_list:
-        board_list.sort(key=lambda x: x["sort_key"])
-        
-    return board_list
+    return board_list if board_list else None
 
 async def get_weather(location: str):
     if not location:
@@ -98,7 +89,7 @@ async def get_weather(location: str):
                 pass
 
     if lat is None:
-        return "🌡 Погода: не удалось определить место"
+        return "🌡 Погода: координаты не найдены"
 
     weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
     async with aiohttp.ClientSession() as session:
@@ -107,10 +98,10 @@ async def get_weather(location: str):
                 if resp.status == 200:
                     temp = (await resp.json()).get("current_weather", {}).get("temperature")
                     if temp is not None:
-                        return f"🌡 Температура в пункте назначения: {round(temp)}°C"
+                        return f"🌡 Погода в пункте назначения: {round(temp)}°C"
         except Exception:
             pass
-    return "🌡 Погода: ошибка получения данных"
+    return "🌡 Погода: данные недоступны"
 
 async def calculate_real_transfer(address: str, airport_code: str = "OVB"):
     airport_code = airport_code.upper().strip()
