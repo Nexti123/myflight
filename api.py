@@ -15,15 +15,20 @@ AIRLINE_PREFIX_MAP = {
     "FZ": "FDB"
 }
 
+# Расширенная база аэропортов для корректного определения таймзон и городов
 AIRPORT_INFO_MAP = {
     "SVO": {"name": "Шереметьево", "city": "Москва", "country": "Россия", "tz": 3},
-    "LED": {"name": "Пулково", "city": "Санкт-Петербург", "country": "Россия", "tz": 3},
-    "DXB": {"name": "Дубай Интернешнл", "city": "Дубай", "country": "ОАЭ", "tz": 4},
-    "AYT": {"name": "Анталья", "city": "Анталья", "country": "Турция", "tz": 3},
-    "VKO": {"name": "Внуково", "city": "Москва", "country": "Россия", "tz": 3},
     "DME": {"name": "Домодедово", "city": "Москва", "country": "Россия", "tz": 3},
+    "VKO": {"name": "Внуково", "city": "Москва", "country": "Россия", "tz": 3},
+    "LED": {"name": "Пулково", "city": "Санкт-Петербург", "country": "Россия", "tz": 3},
+    "AER": {"name": "Сочи", "city": "Сочи", "country": "Россия", "tz": 3},
+    "OVB": {"name": "Толмачево", "city": "Новосибирск", "country": "Россия", "tz": 7},
+    "SVX": {"name": "Кольцово", "city": "Екатеринбург", "country": "Россия", "tz": 5},
+    "DXB": {"name": "Дубай Интернешнл", "city": "Дубай", "country": "ОАЭ", "tz": 4},
+    "IST": {"name": "Стамбул", "city": "Стамбул", "country": "Турция", "tz": 3},
+    "AYT": {"name": "Анталья", "city": "Анталья", "country": "Турция", "tz": 3},
     "JFK": {"name": "имени Джона Кеннеди", "city": "Нью-Йорк", "country": "США", "tz": -4},
-    "IST": {"name": "Стамбул", "city": "Стамбул", "country": "Турция", "tz": 3}
+    "LAX": {"name": "Лос-Анджелес", "city": "Лос-Анджелес", "country": "США", "tz": -7}
 }
 
 def normalize_flight_number(flight_number: str) -> str:
@@ -76,16 +81,21 @@ async def get_flight_info(flight_number: str):
                                 if arr_time and "T" in arr_time:
                                     arr_time = arr_time.replace("T", " ")[:16]
 
-                                dep_iata = dep.get("iata", "SVO")
-                                arr_iata = arr.get("iata", "LED")
+                                dep_iata = dep.get("iata", "SVO").upper()
+                                arr_iata = arr.get("iata", "LED").upper()
                                 
-                                # Расчет разницы во времени
                                 tz_dep = AIRPORT_INFO_MAP.get(dep_iata, {}).get("tz", 3)
                                 tz_arr = AIRPORT_INFO_MAP.get(arr_iata, {}).get("tz", 3)
                                 tz_diff = tz_arr - tz_dep
-                                tz_text = f"Разница во времени: {'+' if tz_diff > 0 else ''}{tz_diff} ч." if tz_diff != 0 else "Часовые пояса совпадают"
+                                
+                                if tz_diff > 0:
+                                    tz_text = f"Разница во времени: +{tz_diff} ч. в пункте назначения"
+                                elif tz_diff < 0:
+                                    tz_text = f"Разница во времени: {tz_diff} ч. в пункте назначения"
+                                else:
+                                    tz_text = "Часовые пояса отправления и назначения совпадают"
 
-                                arr_city = arr.get("city") or arr.get("iata") or "Moscow"
+                                arr_city = arr.get("city") or AIRPORT_INFO_MAP.get(arr_iata, {}).get("city") or "Moscow"
                                 arr_airport_name = arr.get("airport", "Аэропорт назначения")
 
                                 is_flying = (status_raw == "active")
@@ -108,7 +118,7 @@ async def get_flight_info(flight_number: str):
                                     "tz_diff": tz_text,
                                     "fr24_link": fr24_link,
                                     "arr_city_code": arr_city,
-                                    "arr_query_for_weather": arr_city if arr_city else arr_airport_name
+                                    "arr_query_for_weather": arr_city
                                 }
                 except Exception:
                     pass
@@ -165,7 +175,7 @@ async def get_airport_board(airport_code: str):
 
     if not board_list:
         times = ["04:15", "06:30", "08:10", "10:00", "11:45", "13:20", "15:00", "17:15", "19:30", "21:40", "23:10"]
-        destinations = ["Москва (SVO)", "Санкт-Петербург (LED)", "Сочи (AER)", "Дубай (DXB)", "Стамбул (IST)", "Анталья (AYT)", "Екатеринбург (SVX)", "Ташкент (TAS)", "Казань (KZN)"]
+        destinations = ["Москва (SVO)", "Санкт-Петербург (LED)", "Сочи (AER)", "Дубай (DXB)", "Стамбул (IST)", "Анталья (AYT)"]
         for i, t in enumerate(times):
             dest = destinations[i % len(destinations)]
             board_list.append({
@@ -199,15 +209,14 @@ async def get_weather(city_query: str):
                     text = await response.text()
                     clean_text = text.strip()
                     if "html" not in clean_text.lower() and len(clean_text) < 50:
-                        # Умный совет по одежде на основе текста погоды
                         advice = ""
                         lower_txt = clean_text.lower()
                         if any(w in lower_txt for w in ["rain", "дождь", "shower", "ливень"]):
                             advice = " ☂️ Возьмите зонт!"
                         elif any(w in lower_txt for w in ["snow", "снег"]):
-                            advice = " 🧥 Наденьте теплую зимнюю одежду."
+                            advice = " 🧥 Наденьте теплую одежду."
                         elif "-" in clean_text and any(str(n) in clean_text for n in range(10)):
-                            advice = " 🧣 На улице прохладно, захватите куртку."
+                            advice = " 🧣 Прохладно, захватите куртку."
                         
                         return f"🌡 Погода в пункте назначения: {clean_text}.{advice}"
         except Exception:
