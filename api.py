@@ -20,18 +20,18 @@ async def get_flight_info(flight_number: str):
     return {
         "flight": raw_flight,
         "airline": "Авиакомпания",
-        "status": "Отслеживается на Flightradar24 ✈️",
-        "departure_airport": "Информация уточняется",
+        "status": "Актуальный статус на Flightradar24",
+        "departure_airport": "Уточняется",
         "departure_iata": "OVB",
-        "arrival_airport": "Информация уточняется",
+        "arrival_airport": "Уточняется",
         "arrival_iata": "DME",
-        "departure_time": "См. в табло",
-        "arrival_time": "См. в табло",
-        "dep_gate": "Не указан",
-        "dep_terminal": "Не указан",
-        "arr_gate": "Не указан",
-        "arr_terminal": "Не указан",
-        "tz_diff": "Часовые пояса",
+        "departure_time": "--:--",
+        "arrival_time": "--:--",
+        "dep_gate": "—",
+        "dep_terminal": "—",
+        "arr_gate": "—",
+        "arr_terminal": "—",
+        "tz_diff": "",
         "fr24_link": f"https://www.flightradar24.com/data/flights/{raw_flight.lower()}",
         "arr_query_for_weather": "Москва"
     }
@@ -40,60 +40,48 @@ async def get_airport_board(airport_code: str):
     code = airport_code.upper().strip()
     board_list = []
 
+    # Пробуем запросить через публичный JSON-эндпоинт Яндекс Расписаний
+    url = f"https://rasp.yandex.ru/informers/airport/{code}/board.json"
+    
     async with aiohttp.ClientSession(headers=HEADERS) as session:
-        # Используем публичные виджетные эндпоинты Яндекса для табло вылетов
-        if code in ["OVB", "DME"]:
-            url = f"https://backend.yandex.ru/rasp/gate/widget/airport/{code}/departures"
-            try:
-                async with session.get(url, timeout=6) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        flights = data.get("flights", []) or data.get("tab", [])
-                        for f in flights[:25]:
-                            f_num = f.get("number") or f.get("title") or "Рейс"
-                            dest = f.get("target") or f.get("title") or "Назначение"
-                            t_disp = f.get("departure") or f.get("time") or "00:00"
-                            if "T" in t_disp:
-                                t_disp = t_disp.split("T")[1][:5]
-                            elif " " in t_disp:
-                                t_disp = t_disp.split(" ")[1][:5]
-                            
-                            board_list.append({
-                                "flight": str(f_num),
-                                "dest": str(dest),
-                                "time": str(t_disp[:5]),
-                                "sort_key": str(t_disp[:5])
-                            })
-            except Exception as e:
-                print(f"Board parsing error for {code}: {e}")
+        try:
+            async with session.get(url, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    # Парсим секцию вылетов, если она есть в ответе яндекса
+                    departures = data.get("schedule", {}).get("departures", [])
+                    for item in departures:
+                        thread = item.get("thread", {})
+                        f_num = thread.get("number") or thread.get("short_title", "Рейс")
+                        dest = item.get("to", {}).get("title", "Назначение")
+                        time_val = item.get("departure", "")
+                        
+                        if "T" in time_val:
+                            time_str = time_val.split("T")[1][:5]
+                        elif ":" in time_val:
+                            time_str = time_val[:5]
+                        else:
+                            time_str = "--:--"
 
-    # Запасные данные на случай сбоя сети, чтобы табло никогда не выдавало ошибку
-    if not board_list:
-        if code == "OVB":
-            board_list = [
-                {"flight": "S7 5017", "dest": "Екатеринбург", "time": "06:18", "sort_key": "06:18"},
-                {"flight": "SU 1549", "dest": "Москва (Шереметьево)", "time": "06:05", "sort_key": "06:05"},
-                {"flight": "S7 5387", "dest": "Кызыл", "time": "06:44", "sort_key": "06:44"},
-                {"flight": "SU 6542", "dest": "Санкт-Петербург", "time": "09:54", "sort_key": "09:54"},
-                {"flight": "S7 5889", "dest": "Стамбул", "time": "09:50", "sort_key": "09:50"}
-            ]
-        elif code == "DME":
-            board_list = [
-                {"flight": "S7 2514", "dest": "Новосибирск", "time": "07:15", "sort_key": "07:15"},
-                {"flight": "U6 137", "dest": "Сочи", "time": "08:20", "sort_key": "08:20"},
-                {"flight": "WZ 125", "dest": "Анталья", "time": "09:10", "sort_key": "09:10"}
-            ]
-        else:
-            board_list = [
-                {"flight": "SU 100", "dest": "Москва", "time": "10:00", "sort_key": "10:00"}
-            ]
+                        board_list.append({
+                            "flight": str(f_num),
+                            "dest": str(dest),
+                            "time": str(time_str),
+                            "sort_key": str(time_str)
+                        })
+        except Exception as e:
+            print(f"API board fetch error for {code}: {e}")
 
-    board_list.sort(key=lambda x: x["sort_key"])
+    # Если Яндекс отдал пустой ответ или заблокировал, возвращаем пустой массив, 
+    # а не фейковые рейсы, чтобы бот честно сказал, что табло временно недоступно.
+    if board_list:
+        board_list.sort(key=lambda x: x["sort_key"])
+        
     return board_list
 
 async def get_weather(location: str):
     if not location:
-        return "Данные о погоде недоступны"
+        return "Погода недоступна"
     loc_clean = location.upper().strip()
     lat, lon = AIRPORT_DATA.get(loc_clean, {}).get("coords", (None, None))
     
@@ -110,7 +98,7 @@ async def get_weather(location: str):
                 pass
 
     if lat is None:
-        return "🌡 Погода: город не найден"
+        return "🌡 Погода: не удалось определить место"
 
     weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
     async with aiohttp.ClientSession() as session:
@@ -119,10 +107,10 @@ async def get_weather(location: str):
                 if resp.status == 200:
                     temp = (await resp.json()).get("current_weather", {}).get("temperature")
                     if temp is not None:
-                        return f"🌡 Погода в пункте назначения: {round(temp)}°C"
+                        return f"🌡 Температура в пункте назначения: {round(temp)}°C"
         except Exception:
             pass
-    return "🌡 Погода: данные недоступны"
+    return "🌡 Погода: ошибка получения данных"
 
 async def calculate_real_transfer(address: str, airport_code: str = "OVB"):
     airport_code = airport_code.upper().strip()
