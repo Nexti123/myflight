@@ -9,7 +9,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from database import init_db, add_subscription, remove_subscription, check_subscription
-from api import get_flight_info, get_weather, get_airport_board, get_airport_details
+from api import get_flight_info, get_weather, get_airport_board, get_airport_details, calculate_real_transfer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", stream=sys.stdout)
 
@@ -160,14 +160,17 @@ def callback_notes_edit(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("transfer_"))
 def callback_transfer(call):
     bot.answer_callback_query(call.id)
-    flight_num = call.data.split("_")[1]
-    user_states[call.message.chat.id] = f"waiting_transfer_{flight_num}"
-    bot.send_message(call.message.chat.id, f"⏱ <b>Трансфер для рейса {flight_num}</b>\nВведите ваш адрес отправления (например: <i>ул. Арбат, 10</i>):")
+    parts = call.data.split("_")
+    flight_num = parts[1]
+    dep_iata = parts[2] if len(parts) > 2 else "SVO"
+    
+    user_states[call.message.chat.id] = f"waiting_transfer_{flight_num}_{dep_iata}"
+    bot.send_message(call.message.chat.id, f"⏱ <b>Умный Трансфер для рейса {flight_num}</b>\nВведите ваш реальный адрес (например: <i>Москва, Тверская 12</i> или <i>Новосибирск, Красный проспект</i>):")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("export_ics_"))
 def callback_ics(call):
     bot.answer_callback_query(call.id, "📅 Готово!")
-    bot.send_message(call.message.chat.id, f"📅 <b>Календарь:</b> Рейс {call.data.split('_')[2]} успешно учтен. Рекомендуем поставить будильник за 4 часа до вылета.")
+    bot.send_message(call.message.chat.id, f"📅 <b>Календарь:</b> Рейс {call.data.split('_')[2]} учтен. Поставьте будильник за 4 часа до вылета.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("board_"))
 def callback_board(call):
@@ -240,7 +243,7 @@ def show_flight_card(chat_id, user_id, flight_num, msg_id=None):
     if data["fr24_link"]:
         markup.add(InlineKeyboardButton("🗺 Посмотреть на Flightradar24", url=data["fr24_link"]))
     markup.add(
-        InlineKeyboardButton("⏱ Трансфер", callback_data=f"transfer_{data['flight']}"),
+        InlineKeyboardButton("⏱ Трансфер", callback_data=f"transfer_{data['flight']}_{data['departure_iata']}"),
         InlineKeyboardButton("📅 В календарь", callback_data=f"export_ics_{data['flight']}")
     )
     markup.add(InlineKeyboardButton("👨‍👩‍👧 Ссылка для встречающих", url=f"https://t.me/share/url?url={share_link}&text=Следи за моим полетом!"))
@@ -267,15 +270,41 @@ def handle_all_text(message):
         return
 
     if state and state.startswith("waiting_transfer_"):
-        flight_num = state.split("_")[2]
+        parts = state.split("_")
+        flight_num = parts[2]
+        dep_iata = parts[3]
         user_states.pop(chat_id, None)
+        
+        # Запускаем реальный расчет по координатам
+        bot.send_message(chat_id, "🛰 Ищу координаты адреса на карте и считаю расстояние...")
+        transfer_data = run_async(calculate_real_transfer(text, dep_iata))
+        
+        if not transfer_data:
+            bot.send_message(
+                chat_id, 
+                "❌ Не удалось точно определить этот адрес на карте. Попробуйте написать точнее (например: <i>Москва, ул. Тверская 1</i>).",
+                reply_markup=get_main_menu_markup()
+            )
+            return
+            
+        dist = transfer_data["distance"]
+        t_str = transfer_data["time_str"]
+        total_mins = transfer_data["total_minutes"]
+        
+        # Рекомендуемый запас на аэропорт (регистрация + досмотр = 150 минут)
+        airport_buffer = 150
+        total_needed_mins = total_mins + airport_buffer
+        
+        rec_hours = total_needed_mins // 60
+        rec_mins = total_needed_mins % 60
+        
         bot.send_message(
             chat_id,
-            f"🕒 <b>Расчет трансфера для рейса {flight_num}:</b>\n\n"
-            f"📍 Откуда: <b>{text}</b>\n"
-            f"🚗 Время в пути: ~<b>1 ч. 20 мин.</b>\n"
-            f"⏱ Рекомендуемый запас в аэропорту: <b>2.5 часа</b>\n\n"
-            f"🚨 <b>Итог: Выезжайте примерно за 4 часа до вылета!</b>",
+            f"📍 <b>Точный расчет трансфера для рейса {flight_num}:</b>\n\n"
+            f"🛣 Прямое расстояние до аэропорта: <b>{dist} км</b>\n"
+            f"🚗 Время в пути на авто: ~<b>{t_str}</b>\n"
+            f"⏱ Запас в аэропорту (регистрация/досмотр): <b>2.5 часа</b>\n\n"
+            f"🚨 <b>Итог: Рекомендуем выехать из дома за {rec_hours} ч. {rec_mins} мин. до вылета!</b>",
             reply_markup=get_main_menu_markup()
         )
         return
