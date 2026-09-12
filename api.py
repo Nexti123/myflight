@@ -1,5 +1,6 @@
 import os
 import aiohttp
+from datetime import datetime
 
 AIRPORT_DATA = {
     "SVO": {"coords": (55.9726, 37.4146), "name": "Шереметьево (Москва)", "code": "s9600213"},
@@ -43,7 +44,10 @@ async def get_airport_board(airport_code: str):
         return None
 
     station_code = AIRPORT_DATA.get(code, {}).get("code", code)
-    url = f"https://api.rasp.yandex.net/v3.0/schedule/?apikey={API_KEY}&station={station_code}&transport_types=plane&event=departure"
+    
+    # Используем текущую дату для запроса оперативного табло
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    url = f"https://api.rasp.yandex.net/v3.0/search/?apikey={API_KEY}&station={station_code}&transport_types=plane&event=departure&date={today_str}"
 
     board_list = []
     async with aiohttp.ClientSession() as session:
@@ -51,24 +55,29 @@ async def get_airport_board(airport_code: str):
             async with session.get(url, timeout=10) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    schedule = data.get("schedule", [])
-                    for item in schedule[:20]:
+                    # Если search не отдаст, пробуем schedule с датой
+                    segments = data.get("segments") or data.get("schedule") or []
+                    
+                    for item in segments[:20]:
                         thread = item.get("thread", {})
-                        f_num = thread.get("number") or "Рейс"
                         
-                        # Достаем направление
-                        dest = item.get("to", {}).get("title") or thread.get("title", "Пункт назначения")
+                        # Номер рейса
+                        f_num = thread.get("number") or item.get("number") or "Рейс"
                         
-                        # Парсинг всех вариантов времени от Яндекса
-                        time_raw = str(item.get("departure") or item.get("time") or "")
+                        # Пункт назначения
+                        to_data = item.get("to", {})
+                        dest = to_data.get("title") or thread.get("title") or "Пункт назначения"
+                        
+                        # Извлекаем реальное время вылета на сегодня
+                        dep_time = item.get("departure") or item.get("time") or ""
                         time_str = "--:--"
                         
-                        if "T" in time_raw:
-                            time_str = time_raw.split("T")[1][:5]
-                        elif " " in time_raw:
-                            time_str = time_raw.split(" ")[1][:5]
-                        elif len(time_raw) >= 5 and ":" in time_raw:
-                            time_str = time_raw[:5]
+                        if "T" in str(dep_time):
+                            time_str = str(dep_time).split("T")[1][:5]
+                        elif " " in str(dep_time):
+                            time_str = str(dep_time).split(" ")[1][:5]
+                        elif len(str(dep_time)) >= 5:
+                            time_str = str(dep_time)[:5]
 
                         board_list.append({
                             "flight": str(f_num),
@@ -76,7 +85,18 @@ async def get_airport_board(airport_code: str):
                             "time": time_str
                         })
                 else:
-                    print(f"Яндекс ответил ошибкой: статус {resp.status}")
+                    # Резервный запрос через schedule с указанием даты
+                    fallback_url = f"https://api.rasp.yandex.net/v3.0/schedule/?apikey={API_KEY}&station={station_code}&transport_types=plane&event=departure&date={today_str}"
+                    async with session.get(fallback_url, timeout=10) as f_resp:
+                        if f_resp.status == 200:
+                            f_data = await f_resp.json()
+                            for item in f_data.get("schedule", [])[:20]:
+                                thread = item.get("thread", {})
+                                f_num = thread.get("number") or "Рейс"
+                                dest = item.get("to", {}).get("title") or thread.get("title", "Пункт назначения")
+                                dep_time = item.get("departure") or item.get("time") or ""
+                                time_str = str(dep_time).split("T")[1][:5] if "T" in str(dep_time) else "--:--"
+                                board_list.append({"flight": str(f_num), "dest": str(dest)[:20], "time": time_str})
         except Exception as e:
             print(f"Ошибка запроса к Яндекс.Расписаниям: {e}")
 
