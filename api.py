@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 AIRLABS_API_KEY = os.getenv("AIRLABS_API_KEY", "")
 
-# Координаты и временные сдвиги (UTC) для ключевых аэропортов
+# Координаты и часовые пояса (UTC)
 AIRPORT_DATA = {
     "SVO": {"coords": (55.9726, 37.4146), "tz_offset": 3, "name": "Шереметьево (Москва)"},
     "DME": {"coords": (55.4088, 37.9063), "tz_offset": 3, "name": "Домодедово (Москва)"},
@@ -22,6 +22,7 @@ AIRPORT_DATA = {
 }
 
 async def get_flight_info(flight_number: str):
+    """Поиск информации по конкретному номеру рейса"""
     raw_flight = flight_number.upper().replace(" ", "").replace("-", "")
     
     result = {
@@ -47,58 +48,64 @@ async def get_flight_info(flight_number: str):
     if not AIRLABS_API_KEY:
         return result
 
-    sched_url = f"https://airlabs.co/api/v9/schedules?flight_iata={raw_flight}&api_key={AIRLABS_API_KEY}"
-    
     async with aiohttp.ClientSession() as session:
+        # 1. Пробуем получить расписание рейса
+        sched_url = f"https://airlabs.co/api/v9/schedules?flight_iata={raw_flight}&api_key={AIRLABS_API_KEY}"
         try:
             async with session.get(sched_url, timeout=8) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     response = data.get("response", [])
                     if response:
-                        flight_data = response[0]
+                        f = response[0]
+                        result["departure_iata"] = f.get("dep_iata", "")
+                        result["departure_airport"] = f.get("dep_name") or f.get("dep_iata") or "Не указано"
+                        result["arrival_iata"] = f.get("arr_iata", "")
+                        result["arrival_airport"] = f.get("arr_name") or f.get("arr_iata") or "Не указано"
                         
-                        result["departure_iata"] = flight_data.get("dep_iata", "")
-                        result["departure_airport"] = flight_data.get("dep_name", flight_data.get("dep_iata", "Не указано"))
-                        result["arrival_iata"] = flight_data.get("arr_iata", "")
-                        result["arrival_airport"] = flight_data.get("arr_name", flight_data.get("arr_iata", "Не указано"))
+                        dep_t = f.get("dep_time") or f.get("dep_time_utc", "")
+                        arr_t = f.get("arr_time") or f.get("arr_time_utc", "")
                         
-                        dep_time = flight_data.get("dep_time", "")
-                        if dep_time:
-                            result["departure_time"] = dep_time[:16].replace("T", " ")
-                            
-                        arr_time = flight_data.get("arr_time", "")
-                        if arr_time:
-                            result["arrival_time"] = arr_time[:16].replace("T", " ")
+                        if dep_t:
+                            result["departure_time"] = str(dep_t)[:16].replace("T", " ")
+                        if arr_t:
+                            result["arrival_time"] = str(arr_t)[:16].replace("T", " ")
 
-                        result["dep_terminal"] = flight_data.get("dep_terminal", "Не указан") or "Не указан"
-                        result["arr_terminal"] = flight_data.get("arr_terminal", "Не указан") or "Не указан"
-                        result["dep_gate"] = flight_data.get("dep_gate", "Не указан") or "Не указан"
-                        result["arr_gate"] = flight_data.get("arr_gate", "Не указан") or "Не указан"
+                        result["dep_terminal"] = str(f.get("dep_terminal") or "Не указан")
+                        result["arr_terminal"] = str(f.get("arr_terminal") or "Не указан")
+                        result["dep_gate"] = str(f.get("dep_gate") or "Не указан")
+                        result["arr_gate"] = str(f.get("arr_gate") or "Не указан")
                         result["arr_query_for_weather"] = result["arrival_iata"] or result["arrival_airport"]
-                        
+                        result["status"] = "Запланирован 🗓"
                         return result
         except Exception as e:
-            print(f"AirLabs schedules error: {e}")
+            print(f"Schedules error: {e}")
 
+        # 2. Если в расписании нет, ищем в лайв-рейсах
         flight_url = f"https://airlabs.co/api/v9/flight?flight_iata={raw_flight}&api_key={AIRLABS_API_KEY}"
         try:
             async with session.get(flight_url, timeout=8) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    flight_data = data.get("response", {})
-                    if flight_data:
-                        result["status"] = "В пути 🛫" if flight_data.get("status") == "en-route" else flight_data.get("status", result["status"])
-                        result["departure_iata"] = flight_data.get("dep_iata", "")
-                        result["arrival_iata"] = flight_data.get("arr_iata", "")
+                    f = data.get("response", {})
+                    if f:
+                        status_map = {
+                            "en-route": "В пути 🛫",
+                            "landed": "Приземлился 🛬",
+                            "scheduled": "Запланирован 🗓",
+                            "cancelled": "Отменен ❌"
+                        }
+                        result["status"] = status_map.get(f.get("status"), f.get("status", result["status"]))
+                        result["departure_iata"] = f.get("dep_iata", "")
+                        result["arrival_iata"] = f.get("arr_iata", "")
                         result["arr_query_for_weather"] = result["arrival_iata"]
         except Exception as e:
-            print(f"AirLabs live error: {e}")
+            print(f"Live flight error: {e}")
 
     return result
 
 async def get_weather(location: str):
-    """Динамическое получение погоды через Open-Meteo"""
+    """Получение погоды в пункте назначения"""
     if not location:
         return "Данные о погоде недоступны"
     
@@ -140,7 +147,7 @@ async def get_weather(location: str):
     return "🌡 Погода: данные недоступны"
 
 async def calculate_real_transfer(airport_code: str, address: str = "Центр города"):
-    """Расчет времени и расстояния трансфера через OSRM"""
+    """Расчет трансфера от аэропорта"""
     if not airport_code:
         return "Не удалось рассчитать трансфер"
         
@@ -201,12 +208,9 @@ async def calculate_real_transfer(airport_code: str, address: str = "Центр 
     return "Расчет трансфера временно недоступен"
 
 async def get_airport_board(airport_code: str):
-    """Онлайн-табло вылетов аэропорта с автокоррекцией времени"""
+    """Табло вылетов аэропорта"""
     airport_code = airport_code.upper().strip()
     board_list = []
-    
-    # Определение местного сдвига UTC для корректного времени
-    tz_offset = AIRPORT_DATA.get(airport_code, {}).get("tz_offset", 3)
     
     if AIRLABS_API_KEY:
         url = f"https://airlabs.co/api/v9/schedules?dep_iata={airport_code}&api_key={AIRLABS_API_KEY}"
@@ -221,20 +225,13 @@ async def get_airport_board(airport_code: str):
                             f_num = flight.get("flight_iata") or flight.get("flight_number") or "Рейс"
                             arr_info = flight.get("arr_iata") or flight.get("arr_name") or "Назначение"
                             
-                            dep_time_raw = flight.get("dep_time_utc") or flight.get("dep_time", "")
-                            
-                            # Приведение времени к местному формату аэропорта
-                            if len(dep_time_raw) >= 16:
-                                try:
-                                    dt_utc = datetime.strptime(dep_time_raw[:16], "%Y-%m-%d %H:%M")
-                                    dt_local = dt_utc + timedelta(hours=tz_offset)
-                                    time_disp = dt_local.strftime("%H:%M")
-                                except ValueError:
-                                    time_disp = dep_time_raw.split(" ")[1][:5] if " " in dep_time_raw else "00:00"
-                            elif " " in dep_time_raw:
+                            dep_time_raw = str(flight.get("dep_time", ""))
+                            if " " in dep_time_raw:
                                 time_disp = dep_time_raw.split(" ")[1][:5]
+                            elif "T" in dep_time_raw:
+                                time_disp = dep_time_raw.split("T")[1][:5]
                             else:
-                                time_disp = "00:00"
+                                time_disp = dep_time_raw[:5] if dep_time_raw else "00:00"
                                 
                             board_list.append({
                                 "flight": f_num, 
