@@ -210,7 +210,7 @@ def show_airport_board(chat_id, code, msg_id=None):
         else: bot.send_message(chat_id, text, reply_markup=markup)
         return
 
-    lines = [f"{info}\n\n📊 <b>Онлайн-табло вылетов (с текущего момента):</b>\n"]
+    lines = [f"{info}\n\n📊 <b>Онлайн-табло вылетов:</b>\n"]
     for f in board[:30]:
         lines.append(f"⏱ <code>{f['time']}</code> | <b>{f['flight']}</b> ➔ {f['dest']}")
 
