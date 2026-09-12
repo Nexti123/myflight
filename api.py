@@ -48,17 +48,22 @@ async def get_airport_board(airport_code: str):
     board_list = []
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, timeout=8) as resp:
+            async with session.get(url, timeout=10) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     schedule = data.get("schedule", [])
                     for item in schedule[:20]:
                         thread = item.get("thread", {})
                         f_num = thread.get("number") or "Рейс"
-                        dest = item.get("to", {}).get("title", "Пункт назначения")
                         
+                        # Достаем город назначения
+                        dest = item.get("to", {}).get("title") or thread.get("title", "Пункт назначения")
+                        
+                        # Достаем время HH:MM без мусора от ISO-формата
                         time_raw = item.get("departure", "")
-                        time_str = time_raw[11:16] if "T" in time_raw else "--:--"
+                        time_str = "--:--"
+                        if time_raw and "T" in time_raw:
+                            time_str = time_raw.split("T")[1][:5]
 
                         board_list.append({
                             "flight": str(f_num),
