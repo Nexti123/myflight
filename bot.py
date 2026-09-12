@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import logging
 import sys
@@ -275,7 +276,6 @@ def handle_all_text(message):
         dep_iata = parts[3]
         user_states.pop(chat_id, None)
         
-        # Запускаем реальный расчет по координатам
         bot.send_message(chat_id, "🛰 Ищу координаты адреса на карте и считаю расстояние...")
         transfer_data = run_async(calculate_real_transfer(text, dep_iata))
         
@@ -291,7 +291,6 @@ def handle_all_text(message):
         t_str = transfer_data["time_str"]
         total_mins = transfer_data["total_minutes"]
         
-        # Рекомендуемый запас на аэропорт (регистрация + досмотр = 150 минут)
         airport_buffer = 150
         total_needed_mins = total_mins + airport_buffer
         
