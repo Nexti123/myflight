@@ -1,6 +1,6 @@
 import os
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 AIRPORT_DATA = {
     "SVO": {"coords": (55.9726, 37.4146), "name": "Шереметьево (Москва)", "code": "s9600213", "city": "Москва"},
@@ -16,14 +16,71 @@ API_KEY = os.getenv("YANDEX_RASP_API_KEY")
 
 async def get_flight_info(flight_number: str):
     raw_flight = flight_number.upper().replace(" ", "").replace("-", "")
+    if not API_KEY:
+        return _fallback_flight(raw_flight)
+
+    today_str = datetime.now(timezone(timedelta(hours=3))).strftime("%Y-%m-%d")
+    url = f"https://api.rasp.yandex.net/v3.0/search/?apikey={API_KEY}&query={raw_flight}&date={today_str}&transport_types=plane"
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    segments = data.get("segments", [])
+                    if segments:
+                        seg = segments[0]
+                        thread = seg.get("thread", {})
+                        
+                        dep_station = seg.get("from", {}).get("title", "Аэропорт вылета")
+                        dep_iata = seg.get("from", {}).get("code", "OVB")
+                        arr_station = seg.get("to", {}).get("title", "Аэропорт назначения")
+                        arr_iata = seg.get("to", {}).get("code", "SVO")
+                        
+                        dep_time_raw = seg.get("departure", "")
+                        arr_time_raw = seg.get("arrival", "")
+                        
+                        dep_time = dep_time_raw.split("T")[1][:5] if "T" in dep_time_raw else "--:--"
+                        arr_time = arr_time_raw.split("T")[1][:5] if "T" in arr_time_raw else "--:--"
+                        
+                        airline_data = thread.get("carrier", {})
+                        airline_name = airline_data.get("title", "Авиакомпания")
+                        
+                        aircraft = thread.get("vehicle", "—")
+
+                        return {
+                            "flight": raw_flight,
+                            "airline": airline_name,
+                            "status": "Выполняется / По плану ✅",
+                            "departure_airport": dep_station,
+                            "departure_iata": dep_iata,
+                            "arrival_airport": arr_station,
+                            "arrival_iata": arr_iata,
+                            "departure_time": dep_time,
+                            "arrival_time": arr_time,
+                            "dep_gate": "—",
+                            "dep_terminal": "—",
+                            "arr_gate": "—",
+                            "arr_terminal": "—",
+                            "tz_diff": "",
+                            "aircraft": aircraft,
+                            "fr24_link": f"https://www.flightradar24.com/data/flights/{raw_flight.lower()}",
+                            "arr_query_for_weather": arr_station
+                        }
+        except Exception as e:
+            print(f"Flight API Error: {e}")
+
+    return _fallback_flight(raw_flight)
+
+def _fallback_flight(raw_flight):
     return {
         "flight": raw_flight,
         "airline": "Авиакомпания",
         "status": "Отслеживается на Flightradar24 ✈️",
         "departure_airport": "Информация в табло",
         "departure_iata": "OVB",
-        "arrival_airport": "Информация в табло",
-        "arrival_iata": "DME",
+        "arrival_airport": "Москва",
+        "arrival_iata": "SVO",
         "departure_time": "--:--",
         "arrival_time": "--:--",
         "dep_gate": "—",
@@ -43,8 +100,11 @@ async def get_airport_board(airport_code: str):
         return None
 
     station_code = AIRPORT_DATA.get(code, {}).get("code", code)
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    now_time = datetime.now().strftime("%H:%M")
+    
+    # Московское время (UTC+3), чтобы табло всегда совпадало с реальностью
+    msk_time = datetime.now(timezone(timedelta(hours=3)))
+    today_str = msk_time.strftime("%Y-%m-%d")
+    now_time = msk_time.strftime("%H:%M")
     
     url = f"https://api.rasp.yandex.net/v3.0/schedule/?apikey={API_KEY}&station={station_code}&transport_types=plane&event=departure&date={today_str}"
 
@@ -60,11 +120,9 @@ async def get_airport_board(airport_code: str):
                         thread = item.get("thread", {})
                         f_num = thread.get("number") or item.get("number") or "Рейс"
                         
-                        # Достаем точный конечный пункт (чистим от "Москва — ")
                         raw_dest = item.get("to", {}).get("title") or thread.get("title", "Пункт назначения")
                         dest = raw_dest.split(" — ")[-1] if " — " in raw_dest else raw_dest
                         
-                        # Парсим время отправления
                         dep_time = item.get("departure") or item.get("time") or ""
                         time_str = "--:--"
                         if "T" in str(dep_time):
@@ -85,9 +143,9 @@ async def get_airport_board(airport_code: str):
     if not board_list:
         return None
 
-    # Показываем рейсы начиная с текущего часа
+    # Показываем рейсы начиная с текущей минуты
     upcoming_flights = [f for f in board_list if f["time"] >= now_time]
-    result = upcoming_flights if upcoming_flights else board_list[-30:]
+    result = upcoming_flights if upcoming_flights else board_list[:30]
     
     return result[:30]
 
