@@ -203,7 +203,7 @@ def show_airport_board(chat_id, code, page=0, msg_id=None):
     info = get_airport_details(code)
     
     if not board:
-        text = f"{info}\n\n⚠️ <b>Онлайн-табло временно недоступно.</b>\nУбедитесь, что в переменных окружения на Render прописан актуальный <code>AVIATION_API_KEY</code>."
+        text = f"{info}\n\n⚠️ <b>Онлайн-табло временно недоступно.</b>\nУбедитесь, что в переменных окружения на Render прописан актуальный <code>YANDEX_RASP_API_KEY</code>."
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("◀️ Главное меню", callback_data="menu_main"))
         if msg_id: bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
