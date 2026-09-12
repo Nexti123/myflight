@@ -83,7 +83,7 @@ def callback_main(call):
 def callback_enter_flight(call):
     user_states[call.message.chat.id] = "waiting_flight"
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "✍️ <b>Введите номер рейса текстом</b> (например: <code>SU-1234</code>, <code>S7-2514</code>):")
+    bot.send_message(call.message.chat.id, "✍️ <b>Введите номер рейса текстом</b> (например: <code>SU-1430</code>, <code>S7-2514</code>):")
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_enter_airport")
 def callback_enter_airport(call):
@@ -210,9 +210,8 @@ def show_airport_board(chat_id, code, msg_id=None):
         else: bot.send_message(chat_id, text, reply_markup=markup)
         return
 
-    # Вывод полного списка рейсов на весь день
-    lines = [f"{info}\n\n📊 <b>Онлайн-табло вылетов на сегодня:</b>\n"]
-    for f in board[:35]:  # Ограничение по длине телеграм-сообщения
+    lines = [f"{info}\n\n📊 <b>Онлайн-табло вылетов (с текущего момента):</b>\n"]
+    for f in board[:30]:
         lines.append(f"⏱ <code>{f['time']}</code> | <b>{f['flight']}</b> ➔ {f['dest']}")
 
     text_content = "\n".join(lines)
@@ -230,7 +229,7 @@ def show_airport_board(chat_id, code, msg_id=None):
 
 def show_flight_card(chat_id, user_id, flight_num, msg_id=None):
     data = run_async(get_flight_info(flight_num))
-    weather = run_async(get_weather(data.get("arrival_iata", "LED")))
+    weather = run_async(get_weather(data.get("arr_query_for_weather", "Москва")))
     is_sub = run_async(check_subscription(flight_num, user_id))
     bot_info = bot.get_me()
     share_link = f"https://t.me/{bot_info.username}?start=flight_{data['flight']}"
@@ -243,7 +242,6 @@ def show_flight_card(chat_id, user_id, flight_num, msg_id=None):
         f"🕒 Время: {data['departure_time']} | Гейт: <b>{data['dep_gate']}</b> (Терминал: {data['dep_terminal']})\n\n"
         f"🛬 <b>Прибытие:</b> {data['arrival_airport']}\n"
         f"🕒 Время: {data['arrival_time']} | Гейт: <b>{data['arr_gate']}</b> (Терминал: {data['arr_terminal']})\n\n"
-        f"⏰ {data['tz_diff']}\n"
         f"{weather}\n\n"
         f"🛩 Судно: {data['aircraft']}"
     )
@@ -268,6 +266,11 @@ def handle_all_text(message):
     text = message.text.strip()
     state = user_states.get(chat_id)
     
+    if state == "waiting_flight":
+        user_states.pop(chat_id, None)
+        show_flight_card(chat_id, message.from_user.id, text.upper())
+        return
+
     if state == "waiting_airport":
         user_states.pop(chat_id, None)
         show_airport_board(chat_id, text.upper()[:3])
@@ -300,7 +303,7 @@ def handle_all_text(message):
         t_str = transfer_data["time_str"]
         total_mins = transfer_data["total_minutes"]
         
-        airport_buffer = 150  # 2.5 часа на регистрацию и досмотр
+        airport_buffer = 150  # 2.5 часа на сборы и досмотр
         total_needed_mins = total_mins + airport_buffer
         
         rec_hours = total_needed_mins // 60
@@ -311,7 +314,7 @@ def handle_all_text(message):
             f"📍 <b>Расчет трансфера для рейса {flight_num}:</b>\n\n"
             f"🛣 Дистанция до аэропорта: <b>{dist} км</b>\n"
             f"🚗 Время в дороге на авто: <b>{t_str}</b>\n"
-            f"⏱ Запас на регистрацию и регистрацию: <b>2 ч. 30 мин.</b>\n\n"
+            f"⏱ Запас на регистрацию и досмотр: <b>2 ч. 30 мин.</b>\n\n"
             f"🚨 <b>Выезжайте за {rec_hours} ч. {rec_mins} мин. до вылета!</b>",
             reply_markup=get_main_menu_markup()
         )
