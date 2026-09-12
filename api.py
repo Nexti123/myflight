@@ -16,14 +16,14 @@ AIRLINE_PREFIX_MAP = {
 }
 
 AIRPORT_INFO_MAP = {
-    "SVO": {"name": "Шереметьево", "city": "Москва", "country": "Россия", "tz": "UTC+3"},
-    "LED": {"name": "Пулково", "city": "Санкт-Петербург", "country": "Россия", "tz": "UTC+3"},
-    "DXB": {"name": "Дубай Интернешнл", "city": "Дубай", "country": "ОАЭ", "tz": "UTC+4"},
-    "AYT": {"name": "Анталья", "city": "Анталья", "country": "Турция", "tz": "UTC+3"},
-    "VKO": {"name": "Внуково", "city": "Москва", "country": "Россия", "tz": "UTC+3"},
-    "DME": {"name": "Домодедово", "city": "Москва", "country": "Россия", "tz": "UTC+3"},
-    "JFK": {"name": "имени Джона Кеннеди", "city": "Нью-Йорк", "country": "США", "tz": "UTC-4"},
-    "IST": {"name": "Стамбул", "city": "Стамбул", "country": "Турция", "tz": "UTC+3"}
+    "SVO": {"name": "Шереметьево", "city": "Москва", "country": "Россия", "tz": 3},
+    "LED": {"name": "Пулково", "city": "Санкт-Петербург", "country": "Россия", "tz": 3},
+    "DXB": {"name": "Дубай Интернешнл", "city": "Дубай", "country": "ОАЭ", "tz": 4},
+    "AYT": {"name": "Анталья", "city": "Анталья", "country": "Турция", "tz": 3},
+    "VKO": {"name": "Внуково", "city": "Москва", "country": "Россия", "tz": 3},
+    "DME": {"name": "Домодедово", "city": "Москва", "country": "Россия", "tz": 3},
+    "JFK": {"name": "имени Джона Кеннеди", "city": "Нью-Йорк", "country": "США", "tz": -4},
+    "IST": {"name": "Стамбул", "city": "Стамбул", "country": "Турция", "tz": 3}
 }
 
 def normalize_flight_number(flight_number: str) -> str:
@@ -60,11 +60,11 @@ async def get_flight_info(flight_number: str):
                                 
                                 status_raw = flight.get("flight_status", "active")
                                 status_map = {
-                                    "active": "В полете",
-                                    "scheduled": "По расписанию",
-                                    "landed": "Прибыл",
-                                    "cancelled": "Отменен",
-                                    "incident": "Задержан"
+                                    "active": "В полете 🟢",
+                                    "scheduled": "По расписанию ✈️",
+                                    "landed": "Прибыл 🛬",
+                                    "cancelled": "Отменен ❌",
+                                    "incident": "Задержан ⚠️"
                                 }
                                 status_text = status_map.get(status_raw, status_raw.capitalize())
 
@@ -76,8 +76,20 @@ async def get_flight_info(flight_number: str):
                                 if arr_time and "T" in arr_time:
                                     arr_time = arr_time.replace("T", " ")[:16]
 
+                                dep_iata = dep.get("iata", "SVO")
+                                arr_iata = arr.get("iata", "LED")
+                                
+                                # Расчет разницы во времени
+                                tz_dep = AIRPORT_INFO_MAP.get(dep_iata, {}).get("tz", 3)
+                                tz_arr = AIRPORT_INFO_MAP.get(arr_iata, {}).get("tz", 3)
+                                tz_diff = tz_arr - tz_dep
+                                tz_text = f"Разница во времени: {'+' if tz_diff > 0 else ''}{tz_diff} ч." if tz_diff != 0 else "Часовые пояса совпадают"
+
                                 arr_city = arr.get("city") or arr.get("iata") or "Moscow"
                                 arr_airport_name = arr.get("airport", "Аэропорт назначения")
+
+                                is_flying = (status_raw == "active")
+                                fr24_link = f"https://www.flightradar24.com/data/flights/{raw_input.lower()}" if is_flying else None
 
                                 return {
                                     "flight": raw_input,
@@ -88,9 +100,13 @@ async def get_flight_info(flight_number: str):
                                     "departure_time": dep_time,
                                     "arrival_time": arr_time,
                                     "duration": "По расписанию",
-                                    "gate": arr.get("gate") or "Уточняется",
-                                    "terminal": arr.get("terminal") or "Главный",
+                                    "dep_gate": dep.get("gate") or "Уточняется",
+                                    "dep_terminal": dep.get("terminal") or "Главный",
+                                    "arr_gate": arr.get("gate") or "Уточняется",
+                                    "arr_terminal": arr.get("terminal") or "Главный",
                                     "aircraft": aircraft.get("model", "Коммерческий лайнер"),
+                                    "tz_diff": tz_text,
+                                    "fr24_link": fr24_link,
                                     "arr_city_code": arr_city,
                                     "arr_query_for_weather": arr_city if arr_city else arr_airport_name
                                 }
@@ -121,7 +137,6 @@ async def get_airport_board(airport_code: str):
                             dep_obj = flight.get("departure", {}) or {}
                             dep_time_raw = dep_obj.get("scheduled", "00:00:00")
                             
-                            # Извлекаем время ЧЧ:ММ для сортировки и отображения
                             time_sort_key = "00:00"
                             time_display = "—"
                             if dep_time_raw and "T" in dep_time_raw:
@@ -148,7 +163,6 @@ async def get_airport_board(airport_code: str):
             except Exception:
                 pass
 
-    # Если API не вернул данные, генерируем структурированное упорядоченное расписание на весь день
     if not board_list:
         times = ["04:15", "06:30", "08:10", "10:00", "11:45", "13:20", "15:00", "17:15", "19:30", "21:40", "23:10"]
         destinations = ["Москва (SVO)", "Санкт-Петербург (LED)", "Сочи (AER)", "Дубай (DXB)", "Стамбул (IST)", "Анталья (AYT)", "Екатеринбург (SVX)", "Ташкент (TAS)", "Казань (KZN)"]
@@ -162,7 +176,6 @@ async def get_airport_board(airport_code: str):
                 "status": "По расписанию" if i % 2 == 0 else "Летит"
             })
 
-    # Сортируем строго по времени (от утренних к вечерним)
     board_list.sort(key=lambda x: x["sort_key"])
     return board_list
 
@@ -173,12 +186,11 @@ def get_airport_details(airport_code: str):
         return (
             f"🏢 <b>Аэропорт:</b> {info['name']} ({airport_code})\n"
             f"📍 <b>Город / Страна:</b> {info['city']}, {info['country']}\n"
-            f"⏰ <b>Часовой пояс:</b> {info['tz']}"
+            f"⏰ <b>Часовой пояс:</b> UTC+{info['tz']}"
         )
     return f"🏢 <b>Аэропорт с кодом:</b> {airport_code}\n📍 Статус: Работает в штатном режиме."
 
 async def get_weather(city_query: str):
-    # Параметр ?m включает метрическую систему (Градусы Цельсия)
     url = f"https://wttr.in/{city_query}?format=%C+%t&m"
     async with aiohttp.ClientSession() as session:
         try:
@@ -187,7 +199,17 @@ async def get_weather(city_query: str):
                     text = await response.text()
                     clean_text = text.strip()
                     if "html" not in clean_text.lower() and len(clean_text) < 50:
-                        return f"🌡 Погода в пункте назначения: {clean_text}"
+                        # Умный совет по одежде на основе текста погоды
+                        advice = ""
+                        lower_txt = clean_text.lower()
+                        if any(w in lower_txt for w in ["rain", "дождь", "shower", "ливень"]):
+                            advice = " ☂️ Возьмите зонт!"
+                        elif any(w in lower_txt for w in ["snow", "снег"]):
+                            advice = " 🧥 Наденьте теплую зимнюю одежду."
+                        elif "-" in clean_text and any(str(n) in clean_text for n in range(10)):
+                            advice = " 🧣 На улице прохладно, захватите куртку."
+                        
+                        return f"🌡 Погода в пункте назначения: {clean_text}.{advice}"
         except Exception:
             pass
         return "🌡 Погода в пункте назначения: данные уточняются"
