@@ -3,7 +3,6 @@ import aiohttp
 
 AIRLABS_API_KEY = os.getenv("AIRLABS_API_KEY", "")
 
-# Координаты для основных аэропортов
 AIRPORT_COORDS = {
     "SVO": (55.9726, 37.4146),  # Шереметьево / Москва
     "DME": (55.4088, 37.9063),  # Домодедово / Москва
@@ -146,10 +145,10 @@ async def calculate_real_transfer(airport_code: str, address: str = "Центр 
     airport_code = airport_code.upper().strip()
     
     # 1. Координаты аэропорта
+    a_lat, a_lon = None, None
     if airport_code in AIRPORT_COORDS:
         a_lat, a_lon = AIRPORT_COORDS[airport_code]
     else:
-        a_lat, a_lon = None, None
         geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={airport_code}&count=1"
         async with aiohttp.ClientSession() as session:
             try:
@@ -160,8 +159,8 @@ async def calculate_real_transfer(airport_code: str, address: str = "Центр 
                         if results:
                             a_lat = results[0]["latitude"]
                             a_lon = results[0]["longitude"]
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Airport geocoding error: {e}")
 
     if a_lat is None or a_lon is None:
         return "Расчет трансфера: аэропорт не найден"
@@ -179,8 +178,8 @@ async def calculate_real_transfer(airport_code: str, address: str = "Центр 
                     if results:
                         d_lat = results[0]["latitude"]
                         d_lon = results[0]["longitude"]
-            except Exception:
-                pass
+        except Exception as e:
+            print(f"Destination geocoding error: {e}")
 
     if d_lat is None or d_lon is None:
         d_lat, d_lon = a_lat + 0.15, a_lon + 0.15
