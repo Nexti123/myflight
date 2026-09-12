@@ -44,8 +44,8 @@ async def get_airport_board(airport_code: str):
 
     station_code = AIRPORT_DATA.get(code, {}).get("code", code)
     today_str = datetime.now().strftime("%Y-%m-%d")
+    now_time = datetime.now().strftime("%H:%M")
     
-    # Запрашиваем полный суточный список расписания станции
     url = f"https://api.rasp.yandex.net/v3.0/schedule/?apikey={API_KEY}&station={station_code}&transport_types=plane&event=departure&date={today_str}"
 
     board_list = []
@@ -56,12 +56,15 @@ async def get_airport_board(airport_code: str):
                     data = await resp.json()
                     schedule = data.get("schedule", [])
                     
-                    # Выбираем все вылеты за день (до 80 рейсов сразу)
-                    for item in schedule[:80]:
+                    for item in schedule:
                         thread = item.get("thread", {})
                         f_num = thread.get("number") or item.get("number") or "Рейс"
-                        dest = item.get("to", {}).get("title") or thread.get("title", "Пункт назначения")
                         
+                        # Достаем точный конечный пункт (чистим от "Москва — ")
+                        raw_dest = item.get("to", {}).get("title") or thread.get("title", "Пункт назначения")
+                        dest = raw_dest.split(" — ")[-1] if " — " in raw_dest else raw_dest
+                        
+                        # Парсим время отправления
                         dep_time = item.get("departure") or item.get("time") or ""
                         time_str = "--:--"
                         if "T" in str(dep_time):
@@ -73,13 +76,20 @@ async def get_airport_board(airport_code: str):
 
                         board_list.append({
                             "flight": str(f_num),
-                            "dest": str(dest)[:22],
+                            "dest": str(dest)[:20],
                             "time": time_str
                         })
         except Exception as e:
             print(f"Ошибка запроса к Яндекс.Расписаниям: {e}")
 
-    return board_list if board_list else None
+    if not board_list:
+        return None
+
+    # Показываем рейсы начиная с текущего часа
+    upcoming_flights = [f for f in board_list if f["time"] >= now_time]
+    result = upcoming_flights if upcoming_flights else board_list[-30:]
+    
+    return result[:30]
 
 async def get_weather(location: str):
     if not location:
@@ -120,7 +130,6 @@ async def calculate_real_transfer(address: str, airport_code: str = "OVB"):
     a_lat, a_lon = airport_info["coords"]
     city_context = airport_info.get("city", "")
 
-    # Попытка 1: Поиск по введенному адресу + контекст города
     query = f"{address}, {city_context}" if city_context and city_context.lower() not in address.lower() else address
     geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={query}&count=1"
     
@@ -135,7 +144,6 @@ async def calculate_real_transfer(address: str, airport_code: str = "OVB"):
         except Exception:
             pass
 
-    # Попытка 2: Запасной геокодинг без уточнения города
     if not d_lat:
         fallback_geo = f"https://geocoding-api.open-meteo.com/v1/search?name={address}&count=1"
         async with aiohttp.ClientSession() as session:
@@ -151,7 +159,6 @@ async def calculate_real_transfer(address: str, airport_code: str = "OVB"):
     if not d_lat or not d_lon:
         return None
 
-    # Построение автомобильного маршрута через OSRM
     osrm_url = f"http://router.project-osrm.org/route/v1/driving/{d_lon},{d_lat};{a_lon},{a_lat}?overview=false"
     async with aiohttp.ClientSession() as session:
         try:
