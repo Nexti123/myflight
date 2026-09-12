@@ -1,22 +1,24 @@
 import os
 import aiohttp
+from datetime import datetime, timedelta
 
 AIRLABS_API_KEY = os.getenv("AIRLABS_API_KEY", "")
 
-AIRPORT_COORDS = {
-    "SVO": (55.9726, 37.4146),  # Шереметьево / Москва
-    "DME": (55.4088, 37.9063),  # Домодедово / Москва
-    "VKO": (55.5915, 37.2615),  # Внуково / Москва
-    "LED": (59.8003, 30.2625),  # Пулково / Санкт-Петербург
-    "OVB": (55.0126, 82.6507),  # Толмачево / Новосибирск
-    "AER": (43.4499, 39.9566),  # Сочи
-    "SVX": (56.7431, 60.8027),  # Кольцово / Екатеринбург
-    "KZN": (55.6062, 49.2787),  # Казань
-    "KUF": (53.5049, 50.1643),  # Самара
-    "VVO": (43.3990, 132.1480), # Владивосток
-    "DXB": (25.2532, 55.3657),  # Дубай
-    "IST": (41.2753, 28.7519),  # Стамбул
-    "AYT": (36.8987, 30.8005),  # Анталья
+# Координаты и временные сдвиги (UTC) для ключевых аэропортов
+AIRPORT_DATA = {
+    "SVO": {"coords": (55.9726, 37.4146), "tz_offset": 3, "name": "Шереметьево (Москва)"},
+    "DME": {"coords": (55.4088, 37.9063), "tz_offset": 3, "name": "Домодедово (Москва)"},
+    "VKO": {"coords": (55.5915, 37.2615), "tz_offset": 3, "name": "Внуково (Москва)"},
+    "LED": {"coords": (59.8003, 30.2625), "tz_offset": 3, "name": "Пулково (Санкт-Петербург)"},
+    "OVB": {"coords": (55.0126, 82.6507), "tz_offset": 7, "name": "Толмачево (Новосибирск)"},
+    "AER": {"coords": (43.4499, 39.9566), "tz_offset": 3, "name": "Сочи"},
+    "SVX": {"coords": (56.7431, 60.8027), "tz_offset": 5, "name": "Кольцово (Екатеринбург)"},
+    "KZN": {"coords": (55.6062, 49.2787), "tz_offset": 3, "name": "Казань"},
+    "KUF": {"coords": (53.5049, 50.1643), "tz_offset": 4, "name": "Самара"},
+    "VVO": {"coords": (43.3990, 132.1480), "tz_offset": 10, "name": "Владивосток"},
+    "DXB": {"coords": (25.2532, 55.3657), "tz_offset": 4, "name": "Дубай"},
+    "IST": {"coords": (41.2753, 28.7519), "tz_offset": 3, "name": "Стамбул"},
+    "AYT": {"coords": (36.8987, 30.8005), "tz_offset": 3, "name": "Анталья"},
 }
 
 async def get_flight_info(flight_number: str):
@@ -96,15 +98,15 @@ async def get_flight_info(flight_number: str):
     return result
 
 async def get_weather(location: str):
-    """Динамическое получение реальной погоды через Open-Meteo"""
+    """Динамическое получение погоды через Open-Meteo"""
     if not location:
         return "Данные о погоде недоступны"
     
     loc_clean = location.upper().strip()
     lat, lon = None, None
     
-    if loc_clean in AIRPORT_COORDS:
-        lat, lon = AIRPORT_COORDS[loc_clean]
+    if loc_clean in AIRPORT_DATA:
+        lat, lon = AIRPORT_DATA[loc_clean]["coords"]
     else:
         geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1"
         async with aiohttp.ClientSession() as session:
@@ -138,16 +140,15 @@ async def get_weather(location: str):
     return "🌡 Погода: данные недоступны"
 
 async def calculate_real_transfer(airport_code: str, address: str = "Центр города"):
-    """Реальный расчет трансфера через OSRM и геокодинг"""
+    """Расчет времени и расстояния трансфера через OSRM"""
     if not airport_code:
         return "Не удалось рассчитать трансфер"
         
     airport_code = airport_code.upper().strip()
     
-    # 1. Координаты аэропорта
     a_lat, a_lon = None, None
-    if airport_code in AIRPORT_COORDS:
-        a_lat, a_lon = AIRPORT_COORDS[airport_code]
+    if airport_code in AIRPORT_DATA:
+        a_lat, a_lon = AIRPORT_DATA[airport_code]["coords"]
     else:
         geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={airport_code}&count=1"
         async with aiohttp.ClientSession() as session:
@@ -165,7 +166,6 @@ async def calculate_real_transfer(airport_code: str, address: str = "Центр 
     if a_lat is None or a_lon is None:
         return "Расчет трансфера: аэропорт не найден"
 
-    # 2. Координаты точки назначения
     target_name = address if address else "Центр города"
     d_lat, d_lon = None, None
     geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={target_name}&count=1"
@@ -184,7 +184,6 @@ async def calculate_real_transfer(airport_code: str, address: str = "Центр 
     if d_lat is None or d_lon is None:
         d_lat, d_lon = a_lat + 0.15, a_lon + 0.15
 
-    # 3. Запрос времени в пути через OSRM
     osrm_url = f"http://router.project-osrm.org/route/v1/driving/{a_lon},{a_lat};{d_lon},{d_lat}?overview=false"
     async with aiohttp.ClientSession() as session:
         try:
@@ -202,9 +201,12 @@ async def calculate_real_transfer(airport_code: str, address: str = "Центр 
     return "Расчет трансфера временно недоступен"
 
 async def get_airport_board(airport_code: str):
-    """Реальное онлайн-табло вылетов аэропорта"""
+    """Онлайн-табло вылетов аэропорта с автокоррекцией времени"""
     airport_code = airport_code.upper().strip()
     board_list = []
+    
+    # Определение местного сдвига UTC для корректного времени
+    tz_offset = AIRPORT_DATA.get(airport_code, {}).get("tz_offset", 3)
     
     if AIRLABS_API_KEY:
         url = f"https://airlabs.co/api/v9/schedules?dep_iata={airport_code}&api_key={AIRLABS_API_KEY}"
@@ -213,11 +215,27 @@ async def get_airport_board(airport_code: str):
                 async with session.get(url, timeout=8) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        for flight in data.get("response", [])[:30]:
+                        raw_flights = data.get("response", [])
+                        
+                        for flight in raw_flights[:30]:
                             f_num = flight.get("flight_iata") or flight.get("flight_number") or "Рейс"
                             arr_info = flight.get("arr_iata") or flight.get("arr_name") or "Назначение"
-                            dep_time_raw = flight.get("dep_time", "00:00")
-                            time_disp = dep_time_raw.split(" ")[1][:5] if " " in dep_time_raw else dep_time_raw[:5]
+                            
+                            dep_time_raw = flight.get("dep_time_utc") or flight.get("dep_time", "")
+                            
+                            # Приведение времени к местному формату аэропорта
+                            if len(dep_time_raw) >= 16:
+                                try:
+                                    dt_utc = datetime.strptime(dep_time_raw[:16], "%Y-%m-%d %H:%M")
+                                    dt_local = dt_utc + timedelta(hours=tz_offset)
+                                    time_disp = dt_local.strftime("%H:%M")
+                                except ValueError:
+                                    time_disp = dep_time_raw.split(" ")[1][:5] if " " in dep_time_raw else "00:00"
+                            elif " " in dep_time_raw:
+                                time_disp = dep_time_raw.split(" ")[1][:5]
+                            else:
+                                time_disp = "00:00"
+                                
                             board_list.append({
                                 "flight": f_num, 
                                 "dest": arr_info, 
@@ -232,4 +250,5 @@ async def get_airport_board(airport_code: str):
 
 def get_airport_details(airport_code: str):
     airport_code = airport_code.upper().strip()
-    return f"🏢 <b>Аэропорт:</b> {airport_code}"
+    name = AIRPORT_DATA.get(airport_code, {}).get("name", airport_code)
+    return f"🏢 <b>Аэропорт:</b> {name}"
