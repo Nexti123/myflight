@@ -1,5 +1,6 @@
 import aiohttp
 import os
+import math
 
 AVIATION_API_KEY = os.getenv("AVIATION_API_KEY", "")
 
@@ -8,18 +9,19 @@ AIRLINE_PREFIX_MAP = {
     "UT": "UTA", "DP": "PBD", "EK": "UAE", "TK": "THY", "FZ": "FDB"
 }
 
+# Координаты основных аэропортов для точного расчета расстояний и времени трансфера
 AIRPORT_INFO_MAP = {
-    "SVO": {"name": "Шереметьево", "city": "Москва", "country": "Россия", "tz": 3},
-    "DME": {"name": "Домодедово", "city": "Москва", "country": "Россия", "tz": 3},
-    "VKO": {"name": "Внуково", "city": "Москва", "country": "Россия", "tz": 3},
-    "LED": {"name": "Пулково", "city": "Санкт-Петербург", "country": "Россия", "tz": 3},
-    "AER": {"name": "Сочи", "city": "Сочи", "country": "Россия", "tz": 3},
-    "OVB": {"name": "Толмачево", "city": "Новосибирск", "country": "Россия", "tz": 7},
-    "SVX": {"name": "Кольцово", "city": "Екатеринбург", "country": "Россия", "tz": 5},
-    "DXB": {"name": "Дубай Интернешнл", "city": "Дубай", "country": "ОАЭ", "tz": 4},
-    "IST": {"name": "Стамбул", "city": "Стамбул", "country": "Турция", "tz": 3},
-    "AYT": {"name": "Анталья", "city": "Анталья", "country": "Турция", "tz": 3},
-    "JFK": {"name": "имени Джона Кеннеди", "city": "Нью-Йорк", "country": "США", "tz": -4}
+    "SVO": {"name": "Шереметьево", "city": "Москва", "country": "Россия", "tz": 3, "lat": 55.9726, "lon": 37.4146},
+    "DME": {"name": "Домодедово", "city": "Москва", "country": "Россия", "tz": 3, "lat": 55.4088, "lon": 37.9063},
+    "VKO": {"name": "Внуково", "city": "Москва", "country": "Россия", "tz": 3, "lat": 55.5915, "lon": 37.2615},
+    "LED": {"name": "Пулково", "city": "Санкт-Петербург", "country": "Россия", "tz": 3, "lat": 59.8003, "lon": 30.2625},
+    "AER": {"name": "Сочи", "city": "Сочи", "country": "Россия", "tz": 3, "lat": 43.4499, "lon": 39.9566},
+    "OVB": {"name": "Толмачево", "city": "Новосибирск", "country": "Россия", "tz": 7, "lat": 55.0126, "lon": 82.6507},
+    "SVX": {"name": "Кольцово", "city": "Екатеринбург", "country": "Россия", "tz": 5, "lat": 56.7431, "lon": 60.8027},
+    "DXB": {"name": "Дубай Интернешнл", "city": "Дубай", "country": "ОАЭ", "tz": 4, "lat": 25.2532, "lon": 55.3657},
+    "IST": {"name": "Стамбул", "city": "Стамбул", "country": "Турция", "tz": 3, "lat": 41.2753, "lon": 28.7519},
+    "AYT": {"name": "Анталья", "city": "Анталья", "country": "Турция", "tz": 3, "lat": 36.8987, "lon": 30.8005},
+    "JFK": {"name": "имени Джона Кеннеди", "city": "Нью-Йорк", "country": "США", "tz": -4, "lat": 40.6413, "lon": -73.7781}
 }
 
 def normalize_flight_number(flight_number: str) -> str:
@@ -53,7 +55,6 @@ async def get_flight_info(flight_number: str):
                 except Exception:
                     pass
 
-    # Если API не ответило или рейс не найден — формируем надежный рабочий объект, чтобы бот не ломался
     if not flight_data:
         flight_data = {}
 
@@ -106,6 +107,7 @@ async def get_flight_info(flight_number: str):
         "airline": airline.get("name", "Регулярный международный рейс"),
         "status": status_text,
         "departure_airport": dep_airport_name,
+        "departure_iata": dep_iata,
         "arrival_airport": arr_airport_name,
         "departure_time": dep_time,
         "arrival_time": arr_time,
@@ -117,6 +119,58 @@ async def get_flight_info(flight_number: str):
         "tz_diff": tz_text,
         "fr24_link": fr24_link,
         "arr_query_for_weather": arr_city
+    }
+
+# РЕАЛЬНЫЙ геокодер через OpenStreetMap Nominatim
+async def get_coordinates_by_address(address: str):
+    url = f"https://nominatim.openstreetmap.org/search?q={address}&format=json&limit=1"
+    headers = {"User-Agent": "FlightTrackerBot/2.0"}
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers, timeout=4) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data:
+                        return float(data[0]["lat"]), float(data[0]["lon"])
+        except Exception:
+            pass
+    return None
+
+# Точный расчет расстояния по формуле гаверсинусов (в км)
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    return R * c
+
+async def calculate_real_transfer(address: str, dep_iata: str):
+    coords = await get_coordinates_by_address(address)
+    airport_info = AIRPORT_INFO_MAP.get(dep_iata)
+    
+    if not coords or not airport_info:
+        return None # Если адрес не найден на карте
+        
+    user_lat, user_lon = coords
+    ap_lat, ap_lon = airport_info["lat"], airport_info["lon"]
+    
+    distance_km = calculate_distance(user_lat, user_lon, ap_lat, ap_lon)
+    
+    # Средняя скорость движения с учетом городской застройки и трассы (~50 км/ч)
+    avg_speed = 50.0
+    travel_hours = distance_km / avg_speed
+    total_minutes = int(travel_hours * 60)
+    
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    
+    time_str = f"{hours} ч. {minutes} мин." if hours > 0 else f"{minutes} мин."
+    
+    return {
+        "distance": round(distance_km, 1),
+        "time_str": time_str,
+        "total_minutes": total_minutes
     }
 
 async def get_airport_board(airport_code: str):
