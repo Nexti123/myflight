@@ -10,7 +10,7 @@ import requests
 from threading import Thread
 from flask import Flask
 
-# Инициализация логгирования
+# Инициализация логирования
 logging.basicConfig(level=logging.INFO)
 
 # Безопасное чтение токена из переменных окружения Render
@@ -25,7 +25,7 @@ router = Router()
 
 fr_api = FlightRadar24API()
 
-# Хранилище в памяти для демонстрации (чек-листы, заметки, избранное)
+# Хранилище данных в памяти
 user_data_storage = {}
 
 def get_user_storage(user_id: int):
@@ -37,7 +37,7 @@ def get_user_storage(user_id: int):
         }
     return user_data_storage[user_id]
 
-# Главное меню с инлайн-кнопками
+# Главное меню
 def main_menu_keyboard():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✈️ Найти рейс (FR24)", callback_data="menu_flight")],
@@ -60,7 +60,10 @@ async def cmd_start(message: Message):
 
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: CallbackQuery):
-    await callback.message.edit_text("Главное меню помощника:", reply_markup=main_menu_keyboard())
+    try:
+        await callback.message.edit_text("Главное меню помощника:", reply_markup=main_menu_keyboard())
+    except Exception:
+        pass
     await callback.answer()
 
 # ==================== 1. ПОИСК РЕЙСА (FlightRadarAPI) ====================
@@ -68,41 +71,59 @@ async def back_to_main(callback: CallbackQuery):
 async def flight_menu(callback: CallbackQuery):
     text = (
         "✈️ **Трекинг рейсов**\n\n"
-        "Отправь мне номер рейса в чат (например: `SU-1430`, `AFL1430` или `S7 3020`), "
+        "Отправь мне номер рейса в чат (например: `SU-1430`, `AFL1430` или `S7 5234`), "
         "и я запрошу актуальные данные с радара в реальном времени!"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
 
 @router.message(F.text.regexp(r"^[A-Z0-9]{2,3}\s?\d{1,4}$"))
 async def handle_flight_search(message: Message):
     flight_query = message.text.strip().upper().replace(" ", "")
-    await message.answer(f"🔍 Ищу рейс `{flight_query}` на Flightradar24...", parse_mode="Markdown")
+    status_msg = await message.answer(f"🔍 Ищу рейс `{flight_query}` на Flightradar24...", parse_mode="Markdown")
     
     try:
         flights = fr_api.get_flights(flight_query)
+        
+        # Если точного совпадения нет, ищем по глобальной базе через частичное совпадение
         if not flights:
             all_flights = fr_api.get_flights()
-            await message.answer(
-                f"❌ Рейс `{flight_query}` сейчас не найден в активной базе.\n\n"
-                f"Всего активных бортов в сыром ответе API: {len(all_flights) if all_flights else 0}.\n"
-                "Возможно, у рейса другой позывной (например, ICAO вместо IATA) или борт уже приземлился."
+            if all_flights:
+                matching_flights = [
+                    f for f in all_flights 
+                    if flight_query in str(f.get_flight_identification()).upper() or 
+                       flight_query in str(getattr(f, 'callsign', '')).upper()
+                ]
+                if matching_flights:
+                    flights = matching_flights
+
+        if not flights:
+            await status_msg.edit_text(
+                f"❌ Рейс `{flight_query}` сейчас не найден на радаре.\n\n"
+                "Самолет может находиться на земле, совершать полет под другим диспетчерским позывным или уже завершить маршрут.",
+                parse_mode="Markdown"
             )
             return
         
         flight = flights[0]
-        details = fr_api.get_flight_details(flight)
-        flight.set_flight_details(details)
+        try:
+            details = fr_api.get_flight_details(flight)
+            flight.set_flight_details(details)
+        except Exception:
+            pass  # Пропускаем, если детальная информация временно недоступна
         
-        ident = flight.get_flight_identification()
-        origin = flight.origin_airport_name or "Неизвестно"
-        dest = flight.destination_airport_name or "Неизвестно"
-        status = flight.status_text or "Выполняется"
-        lat = flight.latitude
-        lon = flight.longitude
-        alt = flight.altitude
-        speed = flight.ground_speed
+        ident = flight.get_flight_identification() or flight_query
+        origin = getattr(flight, 'origin_airport_name', None) or "Неизвестно"
+        dest = getattr(flight, 'destination_airport_name', None) or "Неизвестно"
+        status = getattr(flight, 'status_text', None) or "Выполняется"
+        lat = getattr(flight, 'latitude', 'Н/Д')
+        lon = getattr(flight, 'longitude', 'Н/Д')
+        alt = getattr(flight, 'altitude', 'Н/Д')
+        speed = getattr(flight, 'ground_speed', 'Н/Д')
         
         response_text = (
             f"✈️ **Рейс: {ident}**\n\n"
@@ -119,11 +140,11 @@ async def handle_flight_search(message: Message):
         storage["tracked_flight"] = ident
         
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В главное меню", callback_data="back_to_main")]])
-        await message.answer(response_text, reply_markup=kb, parse_mode="Markdown", disable_web_page_preview=True)
+        await status_msg.edit_text(response_text, reply_markup=kb, parse_mode="Markdown", disable_web_page_preview=True)
         
     except Exception as e:
-        logging.error(f"Error fetching flight: {e}")
-        await message.answer(f"⚠️ Ошибка при запросе к Flightradar24: {e}")
+        logging.error(f"Error fetching flight {flight_query}: {e}")
+        await status_msg.edit_text("⚠️ Ошибка при запросе данных к Flightradar24. Попробуй другой рейс или повтори позже.")
 
 # ==================== 2. РАСЧЕТ ТРАНСФЕРА (OSRM) ====================
 @router.callback_query(F.data == "menu_transfer")
@@ -136,7 +157,10 @@ async def transfer_menu(callback: CallbackQuery):
         [InlineKeyboardButton(text="📍 Рассчитать тестовый маршрут (Новосибирск)", callback_data="test_osrm")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
     ])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception:
+        pass
     await callback.answer()
 
 @router.callback_query(F.data == "test_osrm")
@@ -144,25 +168,31 @@ async def test_osrm(callback: CallbackQuery):
     url = "http://router.project-osrm.org/route/v1/driving/82.9204,55.0302;82.6506,55.0094?overview=false"
     try:
         res = requests.get(url, timeout=5).json()
-        route = res["routes"][0]
-        duration_mins = round(route["duration"] / 60)
-        distance_km = round(route["distance"] / 1000, 1)
-        
-        buffer_mins = 120
-        total_time = duration_mins + buffer_mins
-        
-        text = (
-            f"🚗 **Расчет маршрута (Центр ➔ Толмачево OVB):**\n\n"
-            f"📏 Расстояние: **{distance_km} км**\n"
-            f"⏱ Чистое время в пути: **~{duration_mins} мин**\n"
-            f"🛡 Рекомендуемый буфер на досмотр: **{buffer_mins} мин**\n"
-            f"⏰ **Итого заложено времени:** ~{total_time} мин"
-        )
+        if "routes" in res and len(res["routes"]) > 0:
+            route = res["routes"][0]
+            duration_mins = round(route["duration"] / 60)
+            distance_km = round(route["distance"] / 1000, 1)
+            
+            buffer_mins = 120
+            total_time = duration_mins + buffer_mins
+            
+            text = (
+                f"🚗 **Расчет маршрута (Центр ➔ Толмачево OVB):**\n\n"
+                f"📏 Расстояние: **{distance_km} км**\n"
+                f"⏱ Чистое время в пути: **~{duration_mins} мин**\n"
+                f"🛡 Рекомендуемый буфер на досмотр: **{buffer_mins} мин**\n"
+                f"⏰ **Итого заложено времени:** ~{total_time} мин"
+            )
+        else:
+            text = "⚠️ Сервер OSRM вернул пустой маршрут."
     except Exception:
         text = "⚠️ Не удалось связаться с картографическим сервисом OSRM."
         
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception:
+        pass
     await callback.answer()
 
 # ==================== 3. ЧЕК-ЛИСТ И ЗАМЕТКИ ====================
@@ -180,7 +210,10 @@ async def checklist_menu(callback: CallbackQuery):
         
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception:
+        pass
     await callback.answer()
 
 @router.callback_query(F.data.startswith("toggle_"))
@@ -199,7 +232,10 @@ async def toggle_item(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(text=f"Переключить: {it}", callback_data=f"toggle_{it}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")])
     
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+    try:
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+    except Exception:
+        pass
     await callback.answer()
 
 @router.callback_query(F.data == "menu_notes")
@@ -207,12 +243,18 @@ async def notes_menu(callback: CallbackQuery):
     storage = get_user_storage(callback.from_user.id)
     text = f"📝 **Твои заметки и брони:**\n\n{storage['notes']}\n\n*(Чтобы изменить, отправь текст с префиксом `/note Твой текст`)*"
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception:
+        pass
     await callback.answer()
 
 @router.message(Command("note"))
 async def save_note(message: Message):
     new_note = message.text.replace("/note", "").strip()
+    if not new_note:
+        await message.answer("⚠️ Текст заметки не может быть пустым. Пример: `/note Отель забронирован`", parse_mode="Markdown")
+        return
     storage = get_user_storage(message.from_user.id)
     storage["notes"] = new_note
     await message.answer(f"✅ Заметка успешно сохранена:\n\n{new_note}")
@@ -227,7 +269,10 @@ async def jetlag_menu(callback: CallbackQuery):
         "3. **Свет:** По прилёте сразу выйди на дневной свет."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception:
+        pass
     await callback.answer()
 
 @router.callback_query(F.data == "menu_airport")
@@ -239,10 +284,13 @@ async def airport_menu(callback: CallbackQuery):
         "• **Багаж:** Делай фото чемодана перед сдачей."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception:
+        pass
     await callback.answer()
 
-# Flask сервер для удержания порта на Render
+# Flask заглушка для Render
 app = Flask(__name__)
 
 @app.route('/')
