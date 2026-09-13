@@ -9,7 +9,7 @@ import requests
 
 # Инициализация логгирования и бота
 logging.basicConfig(level=logging.INFO)
-TOKEN = "8987889905:AAEV-fUDPxQAPzd7DnTKhDS_HGno3rBcnfA"  # Вставь свой токен Telegram-бота
+TOKEN = "8987889905:AAGTeALz5qMfqUGTtvyfMTfuHLOZ0oLFrMM"  # Вставь свой токен Telegram-бота
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
