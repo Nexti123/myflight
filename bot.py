@@ -1,23 +1,31 @@
 import asyncio
 import logging
 import datetime
+import os
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from FlightRadarAPI import FlightRadar24API
+from FlightRadarAPI import FlightRadarAPI
 import requests
+from threading import Thread
+from flask import Flask
 
-# Инициализация логгирования и бота
+# Инициализация логгирования
 logging.basicConfig(level=logging.INFO)
-TOKEN = "8987889905:AAGTeALz5qMfqUGTtvyfMTfuHLOZ0oLFrMM"  # Вставь свой токен Telegram-бота
+
+# Безопасное чтение токена из переменных окружения Render
+TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    logging.error("❌ Ошибка: Не найден токен BOT_TOKEN в переменных окружения!")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 
-fr_api = FlightRadar24API()  # или FlightRadar24API()
+fr_api = FlightRadarAPI()
 
-# Простейшее хранилище в памяти для демонстрации (чек-листы, заметки, избранное)
+# Хранилище в памяти для демонстрации (чек-листы, заметки, избранное)
 user_data_storage = {}
 
 def get_user_storage(user_id: int):
@@ -52,7 +60,7 @@ async def cmd_start(message: Message):
 
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: CallbackQuery):
-    await callback.message.edit_text(" główное меню помощника:", reply_markup=main_menu_keyboard())
+    await callback.message.edit_text("Главное меню помощника:", reply_markup=main_menu_keyboard())
     await callback.answer()
 
 # ==================== 1. ПОИСК РЕЙСА (FlightRadarAPI) ====================
@@ -82,7 +90,6 @@ async def handle_flight_search(message: Message):
         details = fr_api.get_flight_details(flight)
         flight.set_flight_details(details)
         
-        # Сбор данных
         ident = flight.get_flight_identification()
         origin = flight.origin_airport_name or "Неизвестно"
         dest = flight.destination_airport_name or "Неизвестно"
@@ -103,7 +110,6 @@ async def handle_flight_search(message: Message):
             f"🔗 [Открыть на Flightradar24](https://www.flightradar24.com/{ident})"
         )
         
-        # Сохраняем в избранное пользователя
         storage = get_user_storage(message.from_user.id)
         storage["tracked_flight"] = ident
         
@@ -119,8 +125,7 @@ async def handle_flight_search(message: Message):
 async def transfer_menu(callback: CallbackQuery):
     text = (
         "🚗 **Умный расчет трансфера**\n\n"
-        "Я могу рассчитать время поездки до аэропорта через OSRM. "
-        "Отправь координаты или в разработке: расчет из твоего города."
+        "Я могу рассчитать время поездки до аэропорта через OSRM."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📍 Рассчитать тестовый маршрут (Новосибирск)", callback_data="test_osrm")],
@@ -131,8 +136,6 @@ async def transfer_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data == "test_osrm")
 async def test_osrm(callback: CallbackQuery):
-    # Тестовые координаты: Центр Новосибирска -> Аэропорт Толмачево (OVB)
-    # OSRM public API demo
     url = "http://router.project-osrm.org/route/v1/driving/82.9204,55.0302;82.6506,55.0094?overview=false"
     try:
         res = requests.get(url, timeout=5).json()
@@ -140,7 +143,7 @@ async def test_osrm(callback: CallbackQuery):
         duration_mins = round(route["duration"] / 60)
         distance_km = round(route["distance"] / 1000, 1)
         
-        buffer_mins = 120 # 2 часа досмотр
+        buffer_mins = 120
         total_time = duration_mins + buffer_mins
         
         text = (
@@ -148,7 +151,7 @@ async def test_osrm(callback: CallbackQuery):
             f"📏 Расстояние: **{distance_km} км**\n"
             f"⏱ Чистое время в пути: **~{duration_mins} мин**\n"
             f"🛡 Рекомендуемый буфер на досмотр: **{buffer_mins} мин**\n"
-            f"⏰ **Итого заложено времени:** ~{total_time} мин (выезжай заблаговременно!)"
+            f"⏰ **Итого заложено времени:** ~{total_time} мин"
         )
     except Exception:
         text = "⚠️ Не удалось связаться с картографическим сервисом OSRM."
@@ -182,7 +185,6 @@ async def toggle_item(callback: CallbackQuery):
     if item in storage["checklist"]:
         storage["checklist"][item] = not storage["checklist"][item]
     
-    # Перерисовываем чек-лист
     cl = storage["checklist"]
     text = "🎒 **Твой чек-лист вещей:**\n\n"
     buttons = []
@@ -210,15 +212,14 @@ async def save_note(message: Message):
     storage["notes"] = new_note
     await message.answer(f"✅ Заметка успешно сохранена:\n\n{new_note}")
 
-# ==================== 4. НОВЫЕ ФИЧИ: ДЖЕТЛАГ И АЭРОПОРТЫ ====================
+# ==================== 4. ДЖЕТЛАГ И АЭРОПОРТЫ ====================
 @router.callback_query(F.data == "menu_jetlag")
 async def jetlag_menu(callback: CallbackQuery):
     text = (
         "🕒 **Калькулятор джетлага и адаптации**\n\n"
-        "Перелетаешь в другой часовой пояс? Вот базовые правила быстрой перестройки:\n"
-        "1. **Спинокен контроль:** За день до вылета смести режим сна на 1 час ближе к часовому поясу назначения.\n"
-        "2. **Вода:** Пей больше чистой воды во время полета, избегай алкоголя и тяжелого кофе.\n"
-        "3. **Солнечный свет:** По прилёте сразу выйди на дневной свет — это главный биологический будильник для мозга."
+        "1. **Режим сна:** За день до вылета смести режим на 1 час ближе к поясу назначения.\n"
+        "2. **Вода:** Пей больше воды во время полета, избегай кофе и алкоголя.\n"
+        "3. **Свет:** По прилёте сразу выйди на дневной свет."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]])
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
@@ -228,13 +229,23 @@ async def jetlag_menu(callback: CallbackQuery):
 async def airport_menu(callback: CallbackQuery):
     text = (
         "ℹ️ **Аэропортовый гид и лайфхаки**\n\n"
-        "• **Питьевая вода:** Не покупай воду до досмотра задорого. Возьми пустую пластиковую бутылку и набери в питьевом фонтанчике после зоны контроля.\n"
-        "• **Зарядки:** Самые свободные розетки обычно возле выходов на посадку (гейтов) в дальних секторах терминала.\n"
-        "• **Багаж:** Делай фото чемодана перед сдачей на стойку регистрации на случай споров о сохранности."
+        "• **Вода:** Возьми пустую бутылку и набери в питьевом фонтанчике после досмотра.\n"
+        "• **Розетки:** Самые свободные розетки — у дальних гейтов.\n"
+        "• **Багаж:** Делай фото чемодана перед сдачей."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]])
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
+
+# Flask сервер для удержания порта на Render
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "Bot is running!"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=10000)
 
 async def main():
     dp.include_router(router)
@@ -243,4 +254,8 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
     asyncio.run(main())
