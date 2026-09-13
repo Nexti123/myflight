@@ -89,14 +89,14 @@ async def handle_flight_search(message: Message):
     try:
         flights = fr_api.get_flights(flight_query)
         
-        # Если точного совпадения нет, ищем по глобальной базе через частичное совпадение
+        # Если точного совпадения нет, ищем по глобальной базе через безопасные атрибуты
         if not flights:
             all_flights = fr_api.get_flights()
             if all_flights:
                 matching_flights = [
                     f for f in all_flights 
-                    if flight_query in str(f.get_flight_identification()).upper() or 
-                       flight_query in str(getattr(f, 'callsign', '')).upper()
+                    if flight_query in str(getattr(f, 'callsign', '')).upper() or 
+                       flight_query in str(getattr(f, 'id', '')).upper()
                 ]
                 if matching_flights:
                     flights = matching_flights
@@ -114,9 +114,10 @@ async def handle_flight_search(message: Message):
             details = fr_api.get_flight_details(flight)
             flight.set_flight_details(details)
         except Exception:
-            pass  # Пропускаем, если детальная информация временно недоступна
+            pass  # Пропускаем, если детальная информация недоступна
         
-        ident = flight.get_flight_identification() or flight_query
+        # Безопасно получаем данные через атрибуты объекта Flight
+        ident = getattr(flight, 'callsign', None) or getattr(flight, 'id', None) or flight_query
         origin = getattr(flight, 'origin_airport_name', None) or "Неизвестно"
         dest = getattr(flight, 'destination_airport_name', None) or "Неизвестно"
         status = getattr(flight, 'status_text', None) or "Выполняется"
