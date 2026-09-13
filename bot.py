@@ -15,7 +15,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 
-fr_api = FlightRadarAPI()
+fr_api = FlightRadar242API()  # или FlightRadar24API()
 
 # Простейшее хранилище в памяти для демонстрации (чек-листы, заметки, избранное)
 user_data_storage = {}
