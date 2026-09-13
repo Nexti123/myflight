@@ -5,7 +5,7 @@ import os
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from FlightRadarAPI import FlightRadar24API  # <--- Исправлено имя класса
+from FlightRadarAPI import FlightRadar24API
 import requests
 from threading import Thread
 from flask import Flask
@@ -23,7 +23,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 
-fr_api = FlightRadar24API()  # <--- Исправлено имя класса
+fr_api = FlightRadar24API()
 
 # Хранилище в памяти для демонстрации (чек-листы, заметки, избранное)
 user_data_storage = {}
@@ -83,7 +83,11 @@ async def handle_flight_search(message: Message):
     try:
         flights = fr_api.get_flights(query=flight_query)
         if not flights:
-            await message.answer("❌ Рейс не найден или самолет сейчас не в воздухе / не выполняет полет. Проверь номер.")
+            await message.answer(
+                "❌ Рейс не найден на радаре.\n\n"
+                "Скорее всего, самолет сейчас находится на земле, еще не вылетел или уже завершил полет. "
+                "Flightradar24 отслеживает только активные рейсы в воздухе!"
+            )
             return
         
         flight = flights[0]
