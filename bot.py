@@ -5,7 +5,7 @@ import os
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from FlightRadarAPI import FlightRadarAPI
+from FlightRadarAPI import FlightRadar24API  # <--- Исправлено имя класса
 import requests
 from threading import Thread
 from flask import Flask
@@ -23,7 +23,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 
-fr_api = FlightRadarAPI()
+fr_api = FlightRadar24API()  # <--- Исправлено имя класса
 
 # Хранилище в памяти для демонстрации (чек-листы, заметки, избранное)
 user_data_storage = {}
