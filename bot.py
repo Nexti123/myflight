@@ -4,7 +4,7 @@ import datetime
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from FlightRadarAPI import FlightRadarAPI
+from FlightRadarAPI import FlightRadar24API
 import requests
 
 # Инициализация логгирования и бота
