@@ -81,13 +81,13 @@ async def handle_flight_search(message: Message):
     await message.answer(f"🔍 Ищу рейс `{flight_query}` на Flightradar24...", parse_mode="Markdown")
     
     try:
-        # Исправлено: передаем запрос позиционно без ключевого слова query
         flights = fr_api.get_flights(flight_query)
         if not flights:
+            all_flights = fr_api.get_flights()
             await message.answer(
-                "❌ Рейс не найден на радаре.\n\n"
-                "Скорее всего, самолет сейчас находится на земле, еще не вылетел или уже завершил полет. "
-                "Flightradar24 отслеживает только активные рейсы в воздухе!"
+                f"❌ Рейс `{flight_query}` сейчас не найден в активной базе.\n\n"
+                f"Всего активных бортов в сыром ответе API: {len(all_flights) if all_flights else 0}.\n"
+                "Возможно, у рейса другой позывной (например, ICAO вместо IATA) или борт уже приземлился."
             )
             return
         
@@ -123,7 +123,7 @@ async def handle_flight_search(message: Message):
         
     except Exception as e:
         logging.error(f"Error fetching flight: {e}")
-        await message.answer("⚠️ Ошибка при запросе данных к Flightradar24. Попробуй позже.")
+        await message.answer(f"⚠️ Ошибка при запросе к Flightradar24: {e}")
 
 # ==================== 2. РАСЧЕТ ТРАНСФЕРА (OSRM) ====================
 @router.callback_query(F.data == "menu_transfer")
