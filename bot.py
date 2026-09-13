@@ -81,7 +81,8 @@ async def handle_flight_search(message: Message):
     await message.answer(f"🔍 Ищу рейс `{flight_query}` на Flightradar24...", parse_mode="Markdown")
     
     try:
-        flights = fr_api.get_flights(query=flight_query)
+        # Исправлено: передаем запрос позиционно без ключевого слова query
+        flights = fr_api.get_flights(flight_query)
         if not flights:
             await message.answer(
                 "❌ Рейс не найден на радаре.\n\n"
