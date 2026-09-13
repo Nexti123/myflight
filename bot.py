@@ -71,8 +71,8 @@ async def back_to_main(callback: CallbackQuery):
 async def flight_menu(callback: CallbackQuery):
     text = (
         "✈️ **Трекинг рейсов**\n\n"
-        "Отправь мне номер рейса в чат (например: `SU-1430`, `AFL1430` или `S7 5234`), "
-        "и я запрошу актуальные данные с радара в реальном времени!"
+        "Отправь мне номер рейса в чат (например: `S7 5234`, `SU1430`), "
+        "и я найду его среди активных бортов на радаре!"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]])
     try:
@@ -84,40 +84,44 @@ async def flight_menu(callback: CallbackQuery):
 @router.message(F.text.regexp(r"^[A-Z0-9]{2,3}\s?\d{1,4}$"))
 async def handle_flight_search(message: Message):
     flight_query = message.text.strip().upper().replace(" ", "")
-    status_msg = await message.answer(f"🔍 Ищу рейс `{flight_query}` на Flightradar24...", parse_mode="Markdown")
+    status_msg = await message.answer(f"🔍 Сканирую базу активных бортов для рейса `{flight_query}`...", parse_mode="Markdown")
     
     try:
-        flights = fr_api.get_flights(flight_query)
+        # Загружаем всю глобальную сетку активных полетов
+        all_flights = fr_api.get_flights()
+        matching_flights = []
         
-        # Если точного совпадения нет, ищем по глобальной базе через безопасные атрибуты
-        if not flights:
-            all_flights = fr_api.get_flights()
-            if all_flights:
-                matching_flights = [
-                    f for f in all_flights 
-                    if flight_query in str(getattr(f, 'callsign', '')).upper() or 
-                       flight_query in str(getattr(f, 'id', '')).upper()
-                ]
-                if matching_flights:
-                    flights = matching_flights
+        if all_flights:
+            # 1. Проверяем полное совпадение в любом из полей объекта
+            for f in all_flights:
+                dict_repr = str(getattr(f, '__dict__', {})).upper()
+                if flight_query in dict_repr:
+                    matching_flights.append(f)
+            
+            # 2. Если не нашли, ищем по цифрам рейса (например, "5234" из "S75234")
+            if not matching_flights:
+                digits_only = ''.join(filter(str.isdigit, flight_query))
+                if len(digits_only) >= 3:
+                    for f in all_flights:
+                        if digits_only in str(getattr(f, '__dict__', {})).upper():
+                            matching_flights.append(f)
 
-        if not flights:
+        if not matching_flights:
             await status_msg.edit_text(
-                f"❌ Рейс `{flight_query}` сейчас не найден на радаре.\n\n"
-                "Самолет может находиться на земле, совершать полет под другим диспетчерским позывным или уже завершить маршрут.",
+                f"❌ Рейс `{flight_query}` сейчас не найден в воздухе.\n\n"
+                "Самолет может находиться на земле, еще не вылетел или уже завершил полет.",
                 parse_mode="Markdown"
             )
             return
         
-        flight = flights[0]
+        flight = matching_flights[0]
         try:
             details = fr_api.get_flight_details(flight)
             flight.set_flight_details(details)
         except Exception:
-            pass  # Пропускаем, если детальная информация недоступна
+            pass  # Пропускаем, если детальные данные недоступны
         
-        # Безопасно получаем данные через атрибуты объекта Flight
-        ident = getattr(flight, 'callsign', None) or getattr(flight, 'id', None) or flight_query
+        ident = getattr(flight, 'callsign', None) or getattr(flight, 'number', None) or getattr(flight, 'id', None) or flight_query
         origin = getattr(flight, 'origin_airport_name', None) or "Неизвестно"
         dest = getattr(flight, 'destination_airport_name', None) or "Неизвестно"
         status = getattr(flight, 'status_text', None) or "Выполняется"
@@ -127,7 +131,7 @@ async def handle_flight_search(message: Message):
         speed = getattr(flight, 'ground_speed', 'Н/Д')
         
         response_text = (
-            f"✈️ **Рейс: {ident}**\n\n"
+            f"✈️ **Найден рейс: {ident}**\n\n"
             f"🛫 **Откуда:** {origin}\n"
             f"🛬 **Куда:** {dest}\n"
             f"📊 **Статус:** {status}\n"
@@ -138,14 +142,14 @@ async def handle_flight_search(message: Message):
         )
         
         storage = get_user_storage(message.from_user.id)
-        storage["tracked_flight"] = ident
+        storage["tracked_flight"] = str(ident)
         
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В главное меню", callback_data="back_to_main")]])
         await status_msg.edit_text(response_text, reply_markup=kb, parse_mode="Markdown", disable_web_page_preview=True)
         
     except Exception as e:
-        logging.error(f"Error fetching flight {flight_query}: {e}")
-        await status_msg.edit_text("⚠️ Ошибка при запросе данных к Flightradar24. Попробуй другой рейс или повтори позже.")
+        logging.error(f"Error searching flight {flight_query}: {e}")
+        await status_msg.edit_text("⚠️ Ошибка при поиске рейса. Попробуй еще раз чуть позже.")
 
 # ==================== 2. РАСЧЕТ ТРАНСФЕРА (OSRM) ====================
 @router.callback_query(F.data == "menu_transfer")
